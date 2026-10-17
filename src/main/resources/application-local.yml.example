@@ -1,0 +1,20 @@
+server:
+  port: 8080
+
+app:
+  welcome-message: "Welcome to Navodisha Connect (Local Dev Environment)"
+
+spring:
+  datasource:
+    url: jdbc:postgresql://<HOST>/<DB_NAME>?sslmode=require
+    username: <USER>
+    password: <PASSWORD>
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: NavodishaHikariPool
+      maximum-pool-size: 5
+      minimum-idle: 2
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none

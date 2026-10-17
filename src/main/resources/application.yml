@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: navodisha-connect-backend
+  profiles:
+    default: local
+
+app:
+  name: "Navodisha Connect"
+  version: "1.0.0"
+  welcome-message: "Welcome to Navodisha Connect Base"

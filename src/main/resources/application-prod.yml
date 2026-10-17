@@ -1,0 +1,11 @@
+server:
+  # In production (Render, Docker), PORT is often injected via environment variable
+  port: ${PORT:8080}
+
+app:
+  welcome-message: "Welcome to Navodisha Connect (Production)"
+
+logging:
+  level:
+    com.navodishaConnect: INFO
+    org.springframework.web: WARN
