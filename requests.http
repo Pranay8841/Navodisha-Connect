@@ -1,0 +1,92 @@
+### ==============================================================================
+### Navodisha Connect Backend API - Native IntelliJ HTTP Client
+### (Click the green Play ▶ button next to any request to execute it directly inside IntelliJ)
+### ==============================================================================
+
+@baseUrl = http://localhost:8081
+@testPhone = +917620149253
+
+### 1. Ping / Health Check
+GET {{baseUrl}}/api/v1/ping
+Accept: application/json
+
+### 2. Actuator Health
+GET {{baseUrl}}/actuator/health
+Accept: application/json
+
+### 3. Send Phone OTP
+# Look in your IntelliJ Run Console tab for the printed 6-digit OTP code!
+POST {{baseUrl}}/api/v1/auth/otp/send
+Content-Type: application/json
+
+{
+  "phoneNumber": "{{testPhone}}"
+}
+
+### 4. Verify OTP (Paste the 6-digit OTP from IntelliJ Run console)
+# If the user already exists, this automatically returns JWT tokens!
+# Replace 123456 below with the actual code from console
+POST {{baseUrl}}/api/v1/auth/otp/verify
+Content-Type: application/json
+
+{
+  "phoneNumber": "{{testPhone}}",
+  "otp": "123456"
+}
+
+> {%
+  if (response.body.auth && response.body.auth.accessToken) {
+    client.global.set("accessToken", response.body.auth.accessToken);
+    client.log("✅ Auto-saved accessToken: " + response.body.auth.accessToken);
+  }
+%}
+
+### 5. Register New Student (Instant ACTIVE + Returns JWT Tokens)
+POST {{baseUrl}}/api/v1/auth/register
+Content-Type: application/json
+
+{
+  "phoneNumber": "+918888877777",
+  "fullName": "Alok Student",
+  "role": "STUDENT",
+  "jnvName": "JNV Cuttack"
+}
+
+> {%
+  if (response.body.accessToken) {
+    client.global.set("accessToken", response.body.accessToken);
+    client.log("✅ Auto-saved accessToken: " + response.body.accessToken);
+  }
+%}
+
+### 6. Register New Alumnus (Sets status = PENDING_VERIFICATION)
+POST {{baseUrl}}/api/v1/auth/register
+Content-Type: application/json
+
+{
+  "phoneNumber": "+919999988888",
+  "fullName": "Senior Navodayan",
+  "role": "ALUMNUS",
+  "jnvName": "JNV Nagpur"
+}
+
+### 7. Register JNV School Admin (Sets status = PENDING_VERIFICATION)
+POST {{baseUrl}}/api/v1/auth/register
+Content-Type: application/json
+
+{
+  "phoneNumber": "+919111122222",
+  "fullName": "JNV Principal Sir",
+  "role": "JNV_ADMIN",
+  "jnvName": "JNV Pune"
+}
+
+### 8. Get Authenticated User Profile (Protected - Requires Bearer Token)
+# Uses the accessToken automatically captured from registration/login!
+GET {{baseUrl}}/api/v1/users/me
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+### 9. Get Profile Without Token (Expected HTTP 401 Unauthorized)
+GET {{baseUrl}}/api/v1/users/me
+Accept: application/json
