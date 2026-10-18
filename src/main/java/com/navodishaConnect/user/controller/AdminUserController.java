@@ -37,10 +37,10 @@ public class AdminUserController {
 
     /**
      * Lists all users pending verification (Alumni, JNV Admins).
-     * Accessible by both PLATFORM_ADMIN and JNV_ADMIN.
+     * Restricted strictly to PLATFORM_ADMIN.
      */
     @GetMapping("/pending")
-    @PreAuthorize("hasAnyRole('PLATFORM_ADMIN', 'JNV_ADMIN')")
+    @PreAuthorize("hasRole('PLATFORM_ADMIN')")
     public ResponseEntity<List<UserResponse>> getPendingUsers() {
         List<User> pendingUsers = userRepository.findByStatus(UserStatus.PENDING_VERIFICATION);
         List<UserResponse> responses = pendingUsers.stream()

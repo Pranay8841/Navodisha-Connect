@@ -2,6 +2,7 @@ package com.navodishaConnect.user.repository;
 
 import com.navodishaConnect.user.domain.Role;
 import com.navodishaConnect.user.domain.User;
+import com.navodishaConnect.user.domain.UserStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -28,5 +29,5 @@ public interface UserRepository extends JpaRepository<User, UUID> {
 
     List<User> findByRole(Role role);
 
-    List<User> findByStatus(com.navodishaConnect.user.domain.UserStatus status);
+    List<User> findByStatus(UserStatus status);
 }
