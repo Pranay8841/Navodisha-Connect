@@ -1,0 +1,22 @@
+meta {
+  name: 3.2 Update User Status (Platform Admin Only)
+  type: http
+  seq: 2
+}
+
+patch {
+  url: {{baseUrl}}/api/v1/admin/users/{{targetUserId}}/status
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:json {
+  {
+    "status": "ACTIVE",
+    "remarks": "Identity verified successfully"
+  }
+}

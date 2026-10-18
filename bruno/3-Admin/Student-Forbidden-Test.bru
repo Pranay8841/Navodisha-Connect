@@ -1,0 +1,15 @@
+meta {
+  name: 3.3 Student Accessing Admin (Expect 403 Forbidden)
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/v1/admin/users/pending
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}

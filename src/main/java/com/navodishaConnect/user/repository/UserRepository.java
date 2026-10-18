@@ -27,4 +27,6 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     List<User> findByJnvName(String jnvName);
 
     List<User> findByRole(Role role);
+
+    List<User> findByStatus(com.navodishaConnect.user.domain.UserStatus status);
 }
