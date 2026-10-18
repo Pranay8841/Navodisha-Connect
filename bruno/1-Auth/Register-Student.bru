@@ -1,0 +1,27 @@
+meta {
+  name: 1.3 Register Student (Auto-Saves JWT)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/v1/auth/register
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "phoneNumber": "+918888877777",
+    "fullName": "Alok Student",
+    "role": "STUDENT",
+    "jnvName": "JNV Cuttack"
+  }
+}
+
+script:post-response {
+  if (res.body.accessToken) {
+    bru.setEnvVar("accessToken", res.body.accessToken);
+    bru.setEnvVar("refreshToken", res.body.refreshToken);
+  }
+}

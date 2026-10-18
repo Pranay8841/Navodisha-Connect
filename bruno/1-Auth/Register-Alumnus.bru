@@ -1,0 +1,27 @@
+meta {
+  name: 1.4 Register Alumnus (Pending Verification)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/v1/auth/register
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "phoneNumber": "+919999988888",
+    "fullName": "Senior Navodayan",
+    "role": "ALUMNUS",
+    "jnvName": "JNV Nagpur"
+  }
+}
+
+script:post-response {
+  if (res.body.accessToken) {
+    bru.setEnvVar("accessToken", res.body.accessToken);
+    bru.setEnvVar("refreshToken", res.body.refreshToken);
+  }
+}
