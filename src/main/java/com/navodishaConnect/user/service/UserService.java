@@ -4,7 +4,6 @@ import com.navodishaConnect.auth.dto.RegisterRequest;
 import com.navodishaConnect.user.domain.Role;
 import com.navodishaConnect.user.domain.User;
 import com.navodishaConnect.user.domain.UserStatus;
-import com.navodishaConnect.user.dto.UserResponse;
 import com.navodishaConnect.user.repository.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,7 +27,7 @@ public class UserService {
      * - ALUMNUS, JNV_ADMIN -> PENDING_VERIFICATION (requires Platform Admin review)
      */
     @Transactional
-    public UserResponse register(RegisterRequest request) {
+    public User register(RegisterRequest request) {
         if (userRepository.existsByPhoneNumber(request.phoneNumber())) {
             throw new IllegalArgumentException("User with phone number " + request.phoneNumber() + " already exists.");
         }
@@ -40,7 +39,6 @@ public class UserService {
             request.jnvName()
         );
 
-        User savedUser = userRepository.save(user);
-        return UserResponse.fromEntity(savedUser);
+        return userRepository.save(user);
     }
 }
