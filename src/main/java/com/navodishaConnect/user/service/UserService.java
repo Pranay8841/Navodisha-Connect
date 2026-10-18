@@ -22,17 +22,15 @@ public class UserService {
     }
 
     /**
-     * Registers a new platform user in PostgreSQL.
-     * Enforces unique phone and email rules and sets initial verification status based on role.
+     * Registers a new platform user in PostgreSQL using phone-first onboarding.
+     * Enforces unique phone constraints and sets initial status:
+     * - STUDENT -> ACTIVE
+     * - ALUMNUS, JNV_ADMIN -> PENDING_VERIFICATION (requires Platform Admin review)
      */
     @Transactional
     public UserResponse register(RegisterRequest request) {
         if (userRepository.existsByPhoneNumber(request.phoneNumber())) {
             throw new IllegalArgumentException("User with phone number " + request.phoneNumber() + " already exists.");
-        }
-
-        if (request.email() != null && !request.email().isBlank() && userRepository.existsByEmail(request.email())) {
-            throw new IllegalArgumentException("User with email " + request.email() + " already exists.");
         }
 
         User user = new User(
@@ -41,7 +39,6 @@ public class UserService {
             request.role(),
             request.jnvName()
         );
-        user.setEmail(request.email());
 
         User savedUser = userRepository.save(user);
         return UserResponse.fromEntity(savedUser);

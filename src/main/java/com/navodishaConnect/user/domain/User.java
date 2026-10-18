@@ -63,7 +63,9 @@ public class User {
         this.fullName = fullName;
         this.role = role;
         this.jnvName = jnvName;
-        this.status = (role == Role.ALUMNUS) ? UserStatus.PENDING_VERIFICATION : UserStatus.ACTIVE;
+        this.status = (role == Role.ALUMNUS || role == Role.JNV_ADMIN)
+                ? UserStatus.PENDING_VERIFICATION
+                : UserStatus.ACTIVE;
     }
 
     @PrePersist
@@ -72,7 +74,9 @@ public class User {
         this.createdAt = now;
         this.updatedAt = now;
         if (this.status == null) {
-            this.status = (this.role == Role.ALUMNUS) ? UserStatus.PENDING_VERIFICATION : UserStatus.ACTIVE;
+            this.status = (this.role == Role.ALUMNUS || this.role == Role.JNV_ADMIN)
+                    ? UserStatus.PENDING_VERIFICATION
+                    : UserStatus.ACTIVE;
         }
     }
 
