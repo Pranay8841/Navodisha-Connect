@@ -90,6 +90,15 @@ public class JwtService {
         }
     }
 
+    public boolean validateRefreshToken(String token) {
+        try {
+            Claims claims = extractClaims(token);
+            return "REFRESH".equals(claims.get("type", String.class));
+        } catch (JwtException | IllegalArgumentException e) {
+            return false;
+        }
+    }
+
     public long getAccessTokenExpirationMs() {
         return accessTokenExpirationMs;
     }

@@ -94,4 +94,37 @@ public class AuthController {
 
         return ResponseEntity.status(HttpStatus.CREATED).body(auth);
     }
+
+    @PostMapping("/refresh")
+    public ResponseEntity<AuthResponse> refresh(@Valid @RequestBody com.navodishaConnect.auth.dto.RefreshTokenRequest request) {
+        if (!jwtService.validateRefreshToken(request.refreshToken())) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    HttpStatus.UNAUTHORIZED, "Invalid or expired refresh token"
+            );
+        }
+
+        java.util.UUID userId = jwtService.extractUserId(request.refreshToken());
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        HttpStatus.UNAUTHORIZED, "User account not found"
+                ));
+
+        if (user.getStatus() == com.navodishaConnect.user.domain.UserStatus.SUSPENDED) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    HttpStatus.FORBIDDEN, "Account is suspended. Please contact platform support."
+            );
+        }
+
+        String newAccessToken = jwtService.generateAccessToken(user);
+        String newRefreshToken = jwtService.generateRefreshToken(user);
+
+        AuthResponse auth = AuthResponse.of(
+                newAccessToken,
+                newRefreshToken,
+                jwtService.getAccessTokenExpirationMs(),
+                UserResponse.fromEntity(user)
+        );
+
+        return ResponseEntity.ok(auth);
+    }
 }
