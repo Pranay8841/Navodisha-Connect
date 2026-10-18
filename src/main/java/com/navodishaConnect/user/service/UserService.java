@@ -28,6 +28,13 @@ public class UserService {
      */
     @Transactional
     public User register(RegisterRequest request) {
+        if (request.role() == Role.PLATFORM_ADMIN) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "Self-registration as PLATFORM_ADMIN is not permitted."
+            );
+        }
+
         if (userRepository.existsByPhoneNumber(request.phoneNumber())) {
             throw new IllegalArgumentException("User with phone number " + request.phoneNumber() + " already exists.");
         }
