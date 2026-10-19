@@ -9,6 +9,8 @@ import com.navodishaConnect.auth.dto.VerifyOtpResponse;
 import com.navodishaConnect.auth.service.JwtService;
 import com.navodishaConnect.auth.service.OtpService;
 import com.navodishaConnect.user.domain.User;
+import com.navodishaConnect.user.domain.UserStatus;
+import com.navodishaConnect.auth.dto.RefreshTokenRequest;
 import com.navodishaConnect.user.dto.UserResponse;
 import com.navodishaConnect.user.repository.UserRepository;
 import com.navodishaConnect.user.service.UserService;
@@ -96,7 +98,7 @@ public class AuthController {
     }
 
     @PostMapping("/refresh")
-    public ResponseEntity<AuthResponse> refresh(@Valid @RequestBody com.navodishaConnect.auth.dto.RefreshTokenRequest request) {
+    public ResponseEntity<AuthResponse> refresh(@Valid @RequestBody RefreshTokenRequest request) {
         if (!jwtService.validateRefreshToken(request.refreshToken())) {
             throw new org.springframework.web.server.ResponseStatusException(
                     HttpStatus.UNAUTHORIZED, "Invalid or expired refresh token"
@@ -109,7 +111,7 @@ public class AuthController {
                         HttpStatus.UNAUTHORIZED, "User account not found"
                 ));
 
-        if (user.getStatus() == com.navodishaConnect.user.domain.UserStatus.SUSPENDED) {
+        if (user.getStatus() == UserStatus.SUSPENDED) {
             throw new org.springframework.web.server.ResponseStatusException(
                     HttpStatus.FORBIDDEN, "Account is suspended. Please contact platform support."
             );
