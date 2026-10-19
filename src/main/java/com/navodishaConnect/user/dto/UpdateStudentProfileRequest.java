@@ -11,7 +11,7 @@ import java.util.List;
 
 public record UpdateStudentProfileRequest(
     @NotNull(message = "Joining batch year is required")
-    @Min(value = 1980, message = "Joining batch year must be 1980 or later")
+    @Min(value = 1986, message = "Joining batch year must be 1986 or later")
     @Max(value = 2035, message = "Joining batch year cannot be in the distant future")
     Integer joinBatchYear,
 
