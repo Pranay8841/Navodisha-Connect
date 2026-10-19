@@ -1,0 +1,22 @@
+meta {
+  name: 2.4 Update JNV Admin Profile
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{baseUrl}}/api/v1/users/profile/jnv-admin
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:json {
+  {
+    "designation": "PGT Computer Science",
+    "isAlumniCoordinator": true
+  }
+}

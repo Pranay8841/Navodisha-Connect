@@ -1,0 +1,25 @@
+meta {
+  name: 2.2 Update Student Profile
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{baseUrl}}/api/v1/users/profile/student
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:json {
+  {
+    "joinBatchYear": 2020,
+    "classLevel": "Class 12",
+    "stream": "Science (PCM)",
+    "house": "ARAVALI",
+    "preparingFor": ["JEE Advanced", "NDA", "BITSAT"]
+  }
+}

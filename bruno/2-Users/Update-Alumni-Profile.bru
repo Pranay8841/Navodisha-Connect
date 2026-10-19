@@ -1,0 +1,28 @@
+meta {
+  name: 2.3 Update Alumni Profile
+  type: http
+  seq: 3
+}
+
+put {
+  url: {{baseUrl}}/api/v1/users/profile/alumnus
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:json {
+  {
+    "joinBatchYear": 2014,
+    "currentOrg": "Google India",
+    "designation": "Software Engineer II",
+    "currentCity": "Bengaluru",
+    "bio": "Ex-JNV Gadchiroli, IIT Kharagpur '21. Happy to guide juniors on JEE prep and career transitions into software engineering.",
+    "provideMentorshipsOn": ["JEE Preparation", "Computer Science", "Tech Career Guidance"],
+    "willingModes": ["ONLINE", "IN_PERSON_AT_JNV"],
+    "openToHelp": true
+  }
+}
