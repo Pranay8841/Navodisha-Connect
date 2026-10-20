@@ -1,37 +1,36 @@
-HELP.md
-target/
-.mvn/wrapper/maven-wrapper.jar
-!**/src/main/**/target/
-!**/src/test/**/target/
+# Root .gitignore for Navodisha Connect Monorepo
 
-### STS ###
-.apt_generated
-.classpath
-.factorypath
-.project
-.settings
-.springBeans
-.sts4-cache
-
-### IntelliJ IDEA ###
-.idea
+# IDE & Editor files
+.idea/
 *.iws
 *.iml
 *.ipr
-
-### NetBeans ###
-/nbproject/private/
-/nbbuild/
-/dist/
-/nbdist/
-/.nb-gradle/
-build/
-!**/src/main/**/build/
-!**/src/test/**/build/
-
-### VS Code ###
 .vscode/
+.DS_Store
+Thumbs.db
+*.log
 
-### Local Environment Secrets ###
-src/main/resources/application-local.yml
+# Backend
+navodisha-connect-backend/target/
+navodisha-connect-backend/.mvn/wrapper/maven-wrapper.jar
+navodisha-connect-backend/src/main/resources/application-local.yml
+navodisha-connect-backend/.apt_generated
+navodisha-connect-backend/.classpath
+navodisha-connect-backend/.factorypath
+navodisha-connect-backend/.project
+navodisha-connect-backend/.settings
+navodisha-connect-backend/.springBeans
+navodisha-connect-backend/.sts4-cache
 
+# Frontend (Expo / React Native)
+navodisha-connect-frontend/node_modules/
+navodisha-connect-frontend/.expo/
+navodisha-connect-frontend/dist/
+navodisha-connect-frontend/web-build/
+navodisha-connect-frontend/*.tsbuildinfo
+navodisha-connect-frontend/.env
+navodisha-connect-frontend/.env.local
+navodisha-connect-frontend/.env.*.local
+navodisha-connect-frontend/npm-debug.*
+navodisha-connect-frontend/yarn-debug.*
+navodisha-connect-frontend/yarn-error.*
