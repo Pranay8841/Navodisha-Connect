@@ -24,15 +24,16 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    fetchVerificationStatus();
-  }, []);
+    if (user?.role === 'ALUMNUS' || user?.role === 'JNV_ADMIN') {
+      fetchVerificationStatus();
+    }
+  }, [user]);
 
   const fetchVerificationStatus = async () => {
     try {
-      const res = await apiClient.get('/api/v1/verifications/me');
+      const res = await apiClient.get('/api/v1/verifications/my');
       setVerification(res.data);
     } catch (e: any) {
-      // 404 means no request submitted yet (UNVERIFIED)
       if (e.response?.status !== 404) {
         console.warn('Failed to fetch verification:', e);
       }
@@ -42,7 +43,9 @@ export default function HomeScreen() {
   const handleSubmitVerification = async () => {
     setSubmittingVerification(true);
     try {
-      const res = await apiClient.post('/api/v1/verifications');
+      const res = await apiClient.post('/api/v1/verifications', {
+        remarks: 'Navodisha Alumni Verification Request',
+      });
       setVerification(res.data);
       Alert.alert('Verification Submitted! 🎉', 'Your verification request has been sent to your JNV Admin for review.');
       await refreshProfile();
@@ -68,8 +71,9 @@ export default function HomeScreen() {
     ]);
   };
 
-  const isVerified = user?.isVerified || verification?.status === 'APPROVED';
-  const isPending = verification?.status === 'PENDING';
+  const isStudent = user?.role === 'STUDENT';
+  const isVerified = isStudent || user?.isVerified || verification?.status === 'APPROVED';
+  const isPending = !isStudent && verification?.status === 'PENDING';
 
   return (
     <SafeAreaView style={styles.safeArea}>
