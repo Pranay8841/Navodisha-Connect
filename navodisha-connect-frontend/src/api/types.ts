@@ -69,8 +69,27 @@ export interface JnvAdminProfileRequest {
 }
 
 export interface UserProfileResponse {
-  user: UserResponse;
+  id: string;
+  phoneNumber: string;
+  fullName: string;
+  email?: string;
+  role: Role;
+  status: UserStatus;
+  jnvName: string;
   studentDetails?: any;
   alumniDetails?: any;
   jnvAdminDetails?: any;
+  createdAt?: string;
+}
+
+export interface VerificationItemResponse {
+  id: string;
+  userId: string;
+  userFullName: string;
+  userPhone: string;
+  userRole: Role;
+  jnvName: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  remarks?: string;
+  createdAt: string;
 }

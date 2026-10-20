@@ -43,7 +43,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (storedAccessToken) {
           try {
             const profile = await userApi.getMe();
-            setUser(profile.user);
+            const userObj: UserResponse = {
+              id: profile.id,
+              phoneNumber: profile.phoneNumber,
+              fullName: profile.fullName,
+              role: profile.role,
+              status: profile.status,
+              jnvName: profile.jnvName,
+              isVerified: profile.status === 'ACTIVE',
+            };
+            setUser(userObj);
             setFullProfile(profile);
           } catch (err) {
             console.warn('Session expired or backend offline:', err);
@@ -95,7 +104,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const refreshProfile = async () => {
     try {
       const profile = await userApi.getMe();
-      setUser(profile.user);
+      const userObj: UserResponse = {
+        id: profile.id,
+        phoneNumber: profile.phoneNumber,
+        fullName: profile.fullName,
+        role: profile.role,
+        status: profile.status,
+        jnvName: profile.jnvName,
+        isVerified: profile.status === 'ACTIVE',
+      };
+      setUser(userObj);
       setFullProfile(profile);
     } catch (e) {
       console.warn('Failed to refresh profile:', e);
