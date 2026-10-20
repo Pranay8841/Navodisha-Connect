@@ -85,11 +85,17 @@ export interface UserProfileResponse {
 export interface VerificationItemResponse {
   id: string;
   userId: string;
-  userFullName: string;
-  userPhone: string;
-  userRole: Role;
-  jnvName: string;
+  applicantName?: string;
+  applicantPhone?: string;
+  applicantRole?: Role;
+  applicantJnvName?: string;
+  // Fallbacks for compatibility
+  userFullName?: string;
+  userPhone?: string;
+  userRole?: Role;
+  jnvName?: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
   remarks?: string;
   createdAt: string;
+  updatedAt?: string;
 }

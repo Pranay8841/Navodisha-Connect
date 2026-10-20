@@ -55,7 +55,7 @@ export default function Step1RegistrationScreen() {
       } else if (selectedRole === 'ALUMNUS') {
         router.push('/register/alumni');
       } else {
-        router.replace('/home');
+        router.push('/register/staff');
       }
     } catch (error: any) {
       const msg = error.response?.data?.message || error.message || 'Registration failed. Please try again.';
