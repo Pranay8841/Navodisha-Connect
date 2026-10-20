@@ -78,12 +78,23 @@ public class AuthController {
             return ResponseEntity.ok(VerifyOtpResponse.existingUser("Verification successful. Welcome back!", auth));
         }
 
-        return ResponseEntity.ok(VerifyOtpResponse.newUser("Verification successful. Please proceed to complete profile registration."));
+        String signupToken = jwtService.generateSignupToken(request.phoneNumber());
+        return ResponseEntity.ok(VerifyOtpResponse.newUser(
+                "Verification successful. Please proceed to complete profile registration.",
+                signupToken
+        ));
     }
 
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest request) {
-        User user = userService.register(request);
+        if (!jwtService.validateSignupToken(request.signupToken())) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    HttpStatus.UNAUTHORIZED, "Invalid or expired signup token. Please verify OTP again."
+            );
+        }
+
+        String verifiedPhone = jwtService.extractSignupPhoneNumber(request.signupToken());
+        User user = userService.register(verifiedPhone, request);
         String accessToken = jwtService.generateAccessToken(user);
         String refreshToken = jwtService.generateRefreshToken(user);
 
