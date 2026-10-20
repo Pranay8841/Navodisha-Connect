@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "navodisha-connect-frontend",
-    "slug": "navodisha-connect-frontend",
+    "name": "HelloWorld",
+    "slug": "expo-template-default",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "navodishaconnectfrontend",
+    "scheme": "helloworld",
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon"
@@ -20,7 +20,7 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "output": "server",
+      "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
