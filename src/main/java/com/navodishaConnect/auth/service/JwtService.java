@@ -99,6 +99,34 @@ public class JwtService {
         }
     }
 
+    public String generateSignupToken(String phoneNumber) {
+        Date now = new Date();
+        Date expiryDate = new Date(now.getTime() + (15 * 60 * 1000L)); // 15 minutes TTL
+
+        return Jwts.builder()
+                .subject(phoneNumber)
+                .claim("phoneNumber", phoneNumber)
+                .claim("type", "SIGNUP")
+                .issuedAt(now)
+                .expiration(expiryDate)
+                .signWith(signingKey)
+                .compact();
+    }
+
+    public boolean validateSignupToken(String token) {
+        try {
+            Claims claims = extractClaims(token);
+            return "SIGNUP".equals(claims.get("type", String.class));
+        } catch (JwtException | IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    public String extractSignupPhoneNumber(String token) {
+        Claims claims = extractClaims(token);
+        return claims.get("phoneNumber", String.class);
+    }
+
     public long getAccessTokenExpirationMs() {
         return accessTokenExpirationMs;
     }
