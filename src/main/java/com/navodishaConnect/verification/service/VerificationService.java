@@ -55,15 +55,8 @@ public class VerificationService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "A verification request is already pending review.");
         }
 
-        User vouchedBy = null;
-        if (request.vouchedByUserId() != null) {
-            vouchedBy = userRepository.findById(request.vouchedByUserId()).orElse(null);
-        }
-
         VerificationRequest verificationRequest = new VerificationRequest(
                 user,
-                request.proofFileKey(),
-                vouchedBy,
                 request.remarks()
         );
 

@@ -21,6 +21,7 @@ import java.util.UUID;
 
 /**
  * Entity tracking verification requests submitted by Alumni and JNV Admins for Platform Admin review.
+ * Simplified for frictionless community trust (no documents or vouches required).
  */
 @Entity
 @Table(name = "verification_requests")
@@ -34,13 +35,6 @@ public class VerificationRequest {
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
-
-    @Column(name = "proof_file_key")
-    private String proofFileKey;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "vouched_by")
-    private User vouchedBy;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "reviewed_by")
@@ -65,14 +59,6 @@ public class VerificationRequest {
 
     public VerificationRequest(User user, String remarks) {
         this.user = user;
-        this.remarks = remarks;
-        this.status = VerificationStatus.PENDING;
-    }
-
-    public VerificationRequest(User user, String proofFileKey, User vouchedBy, String remarks) {
-        this.user = user;
-        this.proofFileKey = proofFileKey;
-        this.vouchedBy = vouchedBy;
         this.remarks = remarks;
         this.status = VerificationStatus.PENDING;
     }
@@ -107,22 +93,6 @@ public class VerificationRequest {
 
     public void setUser(User user) {
         this.user = user;
-    }
-
-    public String getProofFileKey() {
-        return proofFileKey;
-    }
-
-    public void setProofFileKey(String proofFileKey) {
-        this.proofFileKey = proofFileKey;
-    }
-
-    public User getVouchedBy() {
-        return vouchedBy;
-    }
-
-    public void setVouchedBy(User vouchedBy) {
-        this.vouchedBy = vouchedBy;
     }
 
     public User getReviewedBy() {

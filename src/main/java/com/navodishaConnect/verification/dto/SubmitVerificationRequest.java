@@ -1,13 +1,9 @@
 package com.navodishaConnect.verification.dto;
 
-import java.util.UUID;
-
 /**
  * Request payload for submitting an account verification request.
- * Documents and vouches are completely optional for maximum simplicity.
+ * Completely frictionless: user simply requests verification with an optional note for the Platform Admin.
  */
 public record SubmitVerificationRequest(
-    String proofFileKey,
-    UUID vouchedByUserId,
     String remarks
 ) {}

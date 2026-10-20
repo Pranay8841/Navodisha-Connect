@@ -18,9 +18,7 @@ public record VerificationResponse(
     String applicantJnvName,
     Role applicantRole,
     VerificationStatus status,
-    String proofFileKey,
     String remarks,
-    UUID vouchedBy,
     UUID reviewedBy,
     Instant createdAt,
     Instant updatedAt
@@ -34,9 +32,7 @@ public record VerificationResponse(
             entity.getUser().getJnvName(),
             entity.getUser().getRole(),
             entity.getStatus(),
-            entity.getProofFileKey(),
             entity.getRemarks(),
-            entity.getVouchedBy() != null ? entity.getVouchedBy().getId() : null,
             entity.getReviewedBy() != null ? entity.getReviewedBy().getId() : null,
             entity.getCreatedAt(),
             entity.getUpdatedAt()

@@ -4,8 +4,6 @@
 CREATE TABLE verification_requests (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    proof_file_key VARCHAR(255),
-    vouched_by UUID REFERENCES users(id) ON DELETE SET NULL,
     reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL,
     status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
     remarks TEXT,
