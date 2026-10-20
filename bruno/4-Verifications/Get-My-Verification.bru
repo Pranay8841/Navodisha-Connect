@@ -1,0 +1,15 @@
+meta {
+  name: 4.2 Get My Verification Status
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/v1/verifications/my
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}

@@ -1,0 +1,27 @@
+meta {
+  name: 4.1 Submit Verification Request
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/verifications
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:json {
+  {
+    "remarks": "Batch 2014, JNV Gadchiroli, Aravali House. Working as SDE at Google India."
+  }
+}
+
+script:post-response {
+  if (res.body && res.body.id) {
+    bru.setEnvVar("verificationId", res.body.id);
+  }
+}

@@ -1,0 +1,22 @@
+meta {
+  name: 4.4 Admin Approve Verification
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{baseUrl}}/api/v1/admin/verifications/{{verificationId}}/review
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:json {
+  {
+    "status": "APPROVED",
+    "remarks": "Verified alumnus by Platform Admin."
+  }
+}
