@@ -9,37 +9,62 @@ import {
   Alert,
   ScrollView,
   RefreshControl,
-  Image,
+  Switch,
+  Modal,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { AppColors } from '../constants/colors';
 import { useAuth } from '../context/AuthContext';
-import apiClient from '../api/client';
-import { VerificationItemResponse } from '../api/types';
+import { verificationApi } from '../api/verification';
+import { adminApi } from '../api/admin';
+import { userApi } from '../api/user';
+import { UserResponse, VerificationItemResponse } from '../api/types';
 
 export default function HomeScreen() {
   const router = useRouter();
   const { user, fullProfile, refreshProfile, logout } = useAuth();
 
-  const [verification, setVerification] = useState<any>(null);
+  // Tab State: default to 'HOME'
+  const [currentTab, setCurrentTab] = useState<'HOME' | 'MENTORS' | 'REQUESTS' | 'MY_ASKS' | 'ALUMNI' | 'SESSIONS' | 'CHAT' | 'PROFILE' | 'USERS' | 'REPORTS'>('HOME');
+
+  // Sub-tab Segmented States
+  const [studentSessionSubTab, setStudentSessionSubTab] = useState<'REQUESTS' | 'SESSIONS'>('REQUESTS');
+  const [alumnusRequestSubTab, setAlumnusRequestSubTab] = useState<'STUDENTS' | 'JNV_ASKS'>('STUDENTS');
+
+  // Filter & Search mock states
+  const [searchMentorQuery, setSearchMentorQuery] = useState('');
+  const [selectedFieldChip, setSelectedFieldChip] = useState('All');
+  const [selectedModeFilter, setSelectedModeFilter] = useState('All Modes');
+  const [selectedLanguageFilter, setSelectedLanguageFilter] = useState('All');
+
+  // Notifications Modal State
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false);
+  const [notificationsRead, setNotificationsRead] = useState(false);
+
+  // Common verification & admin states
+  const [verification, setVerification] = useState<VerificationItemResponse | null>(null);
   const [adminRequests, setAdminRequests] = useState<VerificationItemResponse[]>([]);
+  const [pendingUsers, setPendingUsers] = useState<UserResponse[]>([]);
+  const [adminTab, setAdminTab] = useState<'VERIFICATIONS' | 'USERS'>('VERIFICATIONS');
   const [activeReviewIndex, setActiveReviewIndex] = useState(0);
   const [adminNote, setAdminNote] = useState('');
   const [submittingVerification, setSubmittingVerification] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [processingId, setProcessingId] = useState<string | null>(null);
+
+  const activeReq = adminRequests[activeReviewIndex];
 
   const isPlatformAdmin = user?.role === 'PLATFORM_ADMIN';
   const isJnvAdmin = user?.role === 'JNV_ADMIN';
   const isAlumnus = user?.role === 'ALUMNUS';
   const isStudent = user?.role === 'STUDENT';
 
-  // Check if Alumnus is pending or active
-  const isAlumnusPending =
-    isAlumnus && (user?.status !== 'ACTIVE' || verification?.status === 'PENDING' || !verification);
-  const isAlumnusActive = isAlumnus && !isAlumnusPending;
+  // An alumnus or staff member is pending if status is PENDING_VERIFICATION (or verification request is not yet approved)
+  const isAccountPending =
+    (isAlumnus || isJnvAdmin) &&
+    (user?.status === 'PENDING_VERIFICATION' || (verification && verification.status !== 'APPROVED'));
 
   useEffect(() => {
     loadData();
@@ -50,7 +75,7 @@ export default function HomeScreen() {
       await fetchMyVerification();
     }
     if (isPlatformAdmin) {
-      await fetchAdminVerifications();
+      await Promise.all([fetchAdminVerifications(), fetchAdminPendingUsers()]);
     }
   };
 
@@ -63,37 +88,43 @@ export default function HomeScreen() {
 
   const fetchMyVerification = async () => {
     try {
-      const res = await apiClient.get('/api/v1/verifications/my');
-      if (res.data) {
-        setVerification(res.data);
-        if (res.data.remarks) {
-          setAdminNote(res.data.remarks);
-        }
+      const data = await verificationApi.getMyVerification();
+      setVerification(data);
+      if (data?.remarks) {
+        setAdminNote(data.remarks);
       }
     } catch (e: any) {
-      if (e.response?.status !== 404) {
-        console.warn('Failed to fetch verification:', e?.response?.data || e.message);
-      }
+      console.warn('Failed to fetch verification status:', e?.response?.data || e.message);
     }
   };
 
   const fetchAdminVerifications = async () => {
     try {
-      const res = await apiClient.get<VerificationItemResponse[]>('/api/v1/admin/verifications');
-      setAdminRequests(res.data || []);
+      const data = await adminApi.getPendingVerifications();
+      setAdminRequests(data);
     } catch (e: any) {
       console.warn('Failed to fetch admin verifications:', e?.response?.data || e.message);
+    }
+  };
+
+  const fetchAdminPendingUsers = async () => {
+    try {
+      const data = await adminApi.getPendingUsers();
+      setPendingUsers(data);
+    } catch (e: any) {
+      console.warn('Failed to fetch pending users:', e?.response?.data || e.message);
     }
   };
 
   const handleSubmitVerification = async () => {
     setSubmittingVerification(true);
     try {
-      const res = await apiClient.post('/api/v1/verifications', {
-        remarks: adminNote.trim() || 'Navodisha Alumni Verification Request',
-      });
-      setVerification(res.data);
-      Alert.alert('Verification Submitted! 🎉', 'Your verification request has been sent for administrative review.');
+      const res = await verificationApi.submitVerification(adminNote);
+      setVerification(res);
+      Alert.alert(
+        'Request Submitted! 🎉',
+        'Your verification request has been queued for administrative review.'
+      );
       await refreshProfile();
     } catch (e: any) {
       const msg = e.response?.data?.message || 'Failed to submit verification.';
@@ -103,15 +134,15 @@ export default function HomeScreen() {
     }
   };
 
-  const handleReview = async (requestId: string, status: 'APPROVED' | 'REJECTED') => {
-    setReviewingId(requestId);
+  const handleReviewVerification = async (requestId: string, status: 'APPROVED' | 'REJECTED') => {
+    setProcessingId(requestId);
     try {
-      await apiClient.patch(`/api/v1/admin/verifications/${requestId}/review`, {
+      await adminApi.reviewVerification(requestId, {
         status,
-        remarks: status === 'APPROVED' ? 'Verified by Platform Admin' : 'Information could not be verified',
+        remarks: status === 'APPROVED' ? 'Approved by Platform Admin' : 'Information could not be verified',
       });
-      Alert.alert('Review Complete', `Applicant has been ${status.toLowerCase()} successfully.`);
-      await fetchAdminVerifications();
+      Alert.alert('Review Complete', `Applicant verification has been ${status.toLowerCase()} successfully.`);
+      await Promise.all([fetchAdminVerifications(), fetchAdminPendingUsers()]);
       if (activeReviewIndex >= adminRequests.length - 1 && activeReviewIndex > 0) {
         setActiveReviewIndex(activeReviewIndex - 1);
       }
@@ -119,7 +150,46 @@ export default function HomeScreen() {
       const msg = e.response?.data?.message || 'Failed to review request.';
       Alert.alert('Review Error', msg);
     } finally {
-      setReviewingId(null);
+      setProcessingId(null);
+    }
+  };
+
+  const handleUpdateUserStatus = async (
+    targetUserId: string,
+    newStatus: 'ACTIVE' | 'SUSPENDED'
+  ) => {
+    setProcessingId(targetUserId);
+    try {
+      await adminApi.updateUserStatus(targetUserId, {
+        status: newStatus,
+        remarks: `Status set to ${newStatus} by Platform Admin`,
+      });
+      Alert.alert('User Updated', `Account status changed to ${newStatus}.`);
+      await Promise.all([fetchAdminVerifications(), fetchAdminPendingUsers()]);
+    } catch (e: any) {
+      const msg = e.response?.data?.message || 'Failed to update user status.';
+      Alert.alert('Update Error', msg);
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleToggleMentorAvailability = async (value: boolean) => {
+    if (!fullProfile?.alumniDetails) return;
+    try {
+      await userApi.updateAlumniProfile({
+        joinBatchYear: fullProfile.alumniDetails.joinBatchYear,
+        currentOrg: fullProfile.alumniDetails.currentOrg,
+        designation: fullProfile.alumniDetails.designation,
+        currentCity: fullProfile.alumniDetails.currentCity,
+        bio: fullProfile.alumniDetails.bio,
+        provideMentorshipsOn: fullProfile.alumniDetails.provideMentorshipsOn,
+        willingModes: fullProfile.alumniDetails.willingModes,
+        openToHelp: value,
+      });
+      await refreshProfile();
+    } catch (e: any) {
+      Alert.alert('Error', 'Failed to update mentorship availability.');
     }
   };
 
@@ -138,726 +208,1803 @@ export default function HomeScreen() {
   };
 
   // =========================================================================
-  // VIEW 1: PLATFORM ADMIN REVIEW PORTAL (Screenshot 4)
+  // ROLE NAVIGATION DEFINITIONS
   // =========================================================================
+  let tabs: Array<{
+    key: 'HOME' | 'MENTORS' | 'REQUESTS' | 'MY_ASKS' | 'ALUMNI' | 'SESSIONS' | 'CHAT' | 'PROFILE' | 'USERS' | 'REPORTS';
+    label: string;
+    icon: keyof typeof Ionicons.glyphMap;
+    activeIcon: keyof typeof Ionicons.glyphMap;
+    badge?: string;
+    hasDot?: boolean;
+  }> = [];
+
   if (isPlatformAdmin) {
-    const activeReq = adminRequests[activeReviewIndex];
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        {/* Nav Bar */}
-        <View style={styles.topBar}>
-          <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
-            <Ionicons name="arrow-back" size={24} color="#0F172A" />
-          </TouchableOpacity>
-          <View style={styles.navTitleRow}>
-            <View style={styles.navLogo}>
-              <Ionicons name="school" size={16} color={AppColors.primary} />
-            </View>
-            <Text style={styles.navTitle}>Mentor Detail</Text>
-          </View>
-          <TouchableOpacity onPress={handleLogout} activeOpacity={0.7}>
-            <Ionicons name="log-out-outline" size={22} color="#DC2626" />
-          </TouchableOpacity>
-        </View>
-
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
-          
-          {/* Admin Header Banner */}
-          <View style={styles.adminBanner}>
-            <View style={styles.adminBannerBadges}>
-              <View style={styles.adminBadge}>
-                <Ionicons name="shield-checkmark" size={12} color="#F59E0B" />
-                <Text style={styles.adminBadgeText}>Platform Admin Portal</Text>
-              </View>
-              <View style={styles.samitiCertBadge}>
-                <Ionicons name="checkmark-circle" size={12} color="#10B981" />
-                <Text style={styles.samitiCertText}>Samiti Certified</Text>
-              </View>
-            </View>
-
-            <Text style={styles.adminBannerTitle}>Alumni & Staff Verification</Text>
-            <Text style={styles.adminBannerSub}>
-              Review credentials, JNV affiliations & student safety compliance
-            </Text>
-
-            <View style={styles.adminStatsRow}>
-              <View style={styles.adminStatPill}>
-                <Ionicons name="ellipse" size={8} color="#D97706" />
-                <Text style={styles.adminStatText}>Pending Verifications: {adminRequests.length}</Text>
-              </View>
-              <View style={[styles.adminStatPill, { backgroundColor: 'rgba(16, 185, 129, 0.2)' }]}>
-                <Ionicons name="checkmark-circle" size={12} color="#10B981" />
-                <Text style={[styles.adminStatText, { color: '#10B981' }]}>Live Connected</Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Active Review Header */}
-          <View style={styles.activeReviewHeader}>
-            <View style={styles.activeReviewLeft}>
-              <Text style={styles.activeReviewTitle}>Active Review</Text>
-              {adminRequests.length > 0 && (
-                <View style={styles.queueCounterBadge}>
-                  <Text style={styles.queueCounterText}>
-                    {activeReviewIndex + 1} of {adminRequests.length}
-                  </Text>
-                </View>
-              )}
-            </View>
-            <View style={styles.activeReviewIcons}>
-              <Ionicons name="help-circle-outline" size={20} color="#64748B" />
-              <Ionicons name="filter-outline" size={20} color="#64748B" />
-            </View>
-          </View>
-
-          {/* Active Applicant Card */}
-          {adminRequests.length === 0 ? (
-            <View style={styles.emptyCard}>
-              <Ionicons name="checkmark-done-circle" size={48} color="#10B981" />
-              <Text style={styles.emptyTitle}>Queue Cleared!</Text>
-              <Text style={styles.emptySub}>No pending verification requests awaiting review.</Text>
-            </View>
-          ) : (
-            <View style={styles.applicantFullCard}>
-              <View style={styles.applicantHeaderRow}>
-                <View style={styles.applicantAvatarBox}>
-                  <Text style={styles.applicantAvatarText}>
-                    {(activeReq.applicantName || activeReq.userFullName)?.slice(0, 2).toUpperCase() || 'AL'}
-                  </Text>
-                  <View style={styles.applicantVerifiedBadge}>
-                    <Ionicons name="checkmark" size={10} color="#FFFFFF" />
-                  </View>
-                </View>
-
-                <View style={styles.applicantNameCol}>
-                  <Text style={styles.applicantNameText}>
-                    {activeReq.applicantName || activeReq.userFullName || 'Applicant'}
-                  </Text>
-                  <View style={styles.applicantRolePill}>
-                    <Text style={styles.applicantRolePillText}>
-                      {(activeReq.applicantRole || activeReq.userRole) === 'ALUMNUS'
-                        ? 'Alumnus (Batch 2014)'
-                        : 'JNV Staff'}
-                    </Text>
-                  </View>
-                  <View style={styles.applicantPhoneRow}>
-                    <Ionicons name="chatbubble-ellipses-outline" size={12} color="#64748B" />
-                    <Text style={styles.applicantPhoneText}>
-                      {activeReq.applicantPhone || activeReq.userPhone || '+91 98765 43210'}
-                    </Text>
-                    <View style={styles.smsVerifiedTag}>
-                      <Text style={styles.smsVerifiedText}>SMS Verified</Text>
-                    </View>
-                  </View>
-                </View>
-              </View>
-
-              {/* School and Org Details */}
-              <View style={styles.metaRow}>
-                <Ionicons name="school-outline" size={16} color={AppColors.primary} />
-                <Text style={styles.metaBoldText}>
-                  {activeReq.applicantJnvName || activeReq.jnvName || 'JNV Vidyalaya'}
-                </Text>
-                <Text style={styles.metaMutedText}>• Aravali House</Text>
-              </View>
-
-              <View style={styles.metaRow}>
-                <Ionicons name="business-outline" size={16} color="#64748B" />
-                <Text style={styles.metaText}>Senior Software Engineer at Google India, Bengaluru</Text>
-              </View>
-
-              {/* Offered Mentorship Streams */}
-              <Text style={styles.sectionSmallLabel}>Offered Mentorship Streams</Text>
-              <View style={styles.streamsWrap}>
-                <View style={styles.streamBadge}>
-                  <Ionicons name="book-outline" size={12} color={AppColors.primary} />
-                  <Text style={styles.streamBadgeText}>JEE Prep</Text>
-                </View>
-                <View style={styles.streamBadge}>
-                  <Ionicons name="desktop-outline" size={12} color={AppColors.primary} />
-                  <Text style={styles.streamBadgeText}>Computer Science</Text>
-                </View>
-                <View style={styles.streamBadge}>
-                  <Ionicons name="people-outline" size={12} color={AppColors.primary} />
-                  <Text style={styles.streamBadgeText}>Soft Skills</Text>
-                </View>
-              </View>
-
-              {/* Note from Applicant */}
-              {activeReq.remarks && (
-                <View style={styles.applicantNoteBox}>
-                  <Ionicons name="chatbubble-ellipses" size={14} color="#D97706" />
-                  <View style={styles.applicantNoteCol}>
-                    <Text style={styles.applicantNoteTitle}>Note from Applicant</Text>
-                    <Text style={styles.applicantNoteQuote}>"{activeReq.remarks}"</Text>
-                  </View>
-                </View>
-              )}
-
-              {/* Admin Compliance Checks */}
-              <View style={styles.complianceSection}>
-                <View style={styles.complianceHeader}>
-                  <Ionicons name="options-outline" size={16} color={AppColors.primary} />
-                  <Text style={styles.complianceTitle}>Admin Compliance Checks</Text>
-                </View>
-
-                <View style={styles.checkCard}>
-                  <View style={styles.checkIconActive}>
-                    <Ionicons name="checkmark" size={14} color="#FFFFFF" />
-                  </View>
-                  <View style={styles.checkTextCol}>
-                    <Text style={styles.checkLabel}>Mobile Number Verified</Text>
-                    <Text style={styles.checkSub}>OTP authenticated via registered telecom gateway</Text>
-                  </View>
-                  <Ionicons name="lock-closed" size={14} color="#059669" />
-                </View>
-
-                <View style={styles.checkCard}>
-                  <View style={styles.checkIconActive}>
-                    <Ionicons name="checkmark" size={14} color="#FFFFFF" />
-                  </View>
-                  <View style={styles.checkTextCol}>
-                    <Text style={styles.checkLabel}>{activeReq.jnvName} Affiliation Matched</Text>
-                    <Text style={styles.checkSub}>School roster records matched successfully</Text>
-                  </View>
-                  <Ionicons name="school" size={14} color="#059669" />
-                </View>
-
-                <View style={styles.checkCard}>
-                  <View style={styles.checkIconActive}>
-                    <Ionicons name="checkmark" size={14} color="#FFFFFF" />
-                  </View>
-                  <View style={styles.checkTextCol}>
-                    <Text style={styles.checkLabel}>Student Safety Charter Acknowledged</Text>
-                    <Text style={styles.checkSub}>Signed POSH & JNV Child Protection code of conduct</Text>
-                  </View>
-                  <Ionicons name="shield-checkmark" size={14} color="#059669" />
-                </View>
-              </View>
-
-              {/* Approve / Reject Actions */}
-              <TouchableOpacity
-                style={styles.approveLargeBtn}
-                onPress={() => handleReview(activeReq.id, 'APPROVED')}
-                disabled={reviewingId === activeReq.id}
-                activeOpacity={0.85}>
-                {reviewingId === activeReq.id ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <View style={styles.largeBtnContent}>
-                    <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" />
-                    <Text style={styles.approveLargeBtnText}>Approve Alumnus</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.rejectOutlineBtn}
-                onPress={() => handleReview(activeReq.id, 'REJECTED')}
-                disabled={reviewingId === activeReq.id}
-                activeOpacity={0.7}>
-                <View style={styles.largeBtnContent}>
-                  <Ionicons name="close-circle-outline" size={18} color="#DC2626" />
-                  <Text style={styles.rejectOutlineText}>Reject Application</Text>
-                </View>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {/* Next in Queue List */}
-          {adminRequests.length > 1 && (
-            <View style={styles.queueSection}>
-              <View style={styles.queueHeaderRow}>
-                <Text style={styles.queueSectionTitle}>Next in Queue</Text>
-                <Text style={styles.queueRemainingText}>{adminRequests.length - 1} remaining</Text>
-              </View>
-
-              {adminRequests.map((req, i) => {
-                if (i === activeReviewIndex) return null;
-                return (
-                  <TouchableOpacity
-                    key={req.id}
-                    style={styles.queueCard}
-                    onPress={() => setActiveReviewIndex(i)}
-                    activeOpacity={0.7}>
-                    <View style={styles.queueAvatar}>
-                      <Text style={styles.queueAvatarText}>
-                        {(req.applicantName || req.userFullName)?.slice(0, 2).toUpperCase() || 'AL'}
-                      </Text>
-                    </View>
-                    <View style={styles.queueTextCol}>
-                      <Text style={styles.queueName}>{req.applicantName || req.userFullName || 'Applicant'}</Text>
-                      <View style={styles.queueTag}>
-                        <Text style={styles.queueTagText}>
-                          {(req.applicantRole || req.userRole) === 'ALUMNUS' ? 'Alumnus' : 'JNV Staff'}
-                        </Text>
-                      </View>
-                      <Text style={styles.queueSub}>{req.applicantJnvName || req.jnvName || 'JNV Vidyalaya'}</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          )}
-
-          <View style={styles.auditRow}>
-            <Ionicons name="lock-closed" size={12} color="#059669" />
-            <Text style={styles.auditText}>End-to-End Cryptographic Audit Logging Enabled</Text>
-          </View>
-        </ScrollView>
-      </SafeAreaView>
-    );
+    tabs = [
+      {
+        key: 'HOME',
+        label: 'Verifications',
+        icon: 'shield-checkmark-outline',
+        activeIcon: 'shield-checkmark',
+        badge: adminRequests.length > 0 ? String(adminRequests.length) : undefined,
+      },
+      {
+        key: 'USERS',
+        label: 'Users',
+        icon: 'people-outline',
+        activeIcon: 'people',
+        badge: pendingUsers.length > 0 ? String(pendingUsers.length) : undefined,
+      },
+      {
+        key: 'REPORTS',
+        label: 'Reports',
+        icon: 'bar-chart-outline',
+        activeIcon: 'bar-chart',
+      },
+      {
+        key: 'PROFILE',
+        label: 'Profile',
+        icon: 'person-circle-outline',
+        activeIcon: 'person-circle',
+      },
+    ];
+  } else if (isAccountPending) {
+    tabs = [
+      { key: 'HOME', label: 'Home', icon: 'shield-outline', activeIcon: 'shield' },
+      { key: 'PROFILE', label: 'Profile', icon: 'person-circle-outline', activeIcon: 'person-circle' },
+    ];
+  } else if (isStudent) {
+    tabs = [
+      { key: 'HOME', label: 'Home', icon: 'home-outline', activeIcon: 'home' },
+      { key: 'MENTORS', label: 'Mentors', icon: 'people-outline', activeIcon: 'people' },
+      { key: 'SESSIONS', label: 'Sessions', icon: 'calendar-outline', activeIcon: 'calendar', hasDot: true },
+      { key: 'CHAT', label: 'Chat', icon: 'chatbubbles-outline', activeIcon: 'chatbubbles', badge: '3' },
+      { key: 'PROFILE', label: 'Profile', icon: 'person-circle-outline', activeIcon: 'person-circle' },
+    ];
+  } else if (isAlumnus) {
+    tabs = [
+      { key: 'HOME', label: 'Home', icon: 'home-outline', activeIcon: 'home' },
+      { key: 'REQUESTS', label: 'Requests', icon: 'git-pull-request-outline', activeIcon: 'git-pull-request', hasDot: true },
+      { key: 'SESSIONS', label: 'Sessions', icon: 'calendar-outline', activeIcon: 'calendar' },
+      { key: 'CHAT', label: 'Chat', icon: 'chatbubbles-outline', activeIcon: 'chatbubbles', badge: '2' },
+      { key: 'PROFILE', label: 'Profile', icon: 'person-circle-outline', activeIcon: 'person-circle' },
+    ];
+  } else if (isJnvAdmin) {
+    tabs = [
+      { key: 'HOME', label: 'Home', icon: 'home-outline', activeIcon: 'home' },
+      { key: 'MY_ASKS', label: 'My Asks', icon: 'megaphone-outline', activeIcon: 'megaphone', badge: '1' },
+      { key: 'ALUMNI', label: 'Alumni', icon: 'school-outline', activeIcon: 'school' },
+      { key: 'CHAT', label: 'Chat', icon: 'chatbubbles-outline', activeIcon: 'chatbubbles', badge: '1' },
+      { key: 'PROFILE', label: 'Profile', icon: 'person-circle-outline', activeIcon: 'person-circle' },
+    ];
   }
 
-  // =========================================================================
-  // VIEW 2: ALUMNUS PENDING VERIFICATION PORTAL (Screenshot 2)
-  // =========================================================================
-  if (isAlumnusPending) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        {/* Top Header */}
-        <View style={styles.topBar}>
-          <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
-            <Ionicons name="arrow-back" size={24} color="#0F172A" />
-          </TouchableOpacity>
-          <View style={styles.navTitleRow}>
-            <View style={styles.navLogo}>
-              <Ionicons name="school" size={16} color={AppColors.primary} />
-            </View>
-            <Text style={styles.navTitle}>Mentor Detail</Text>
-          </View>
-          <View style={styles.navAvatar}>
-            <Ionicons name="person" size={18} color="#FFFFFF" />
-          </View>
-        </View>
-
-        {/* Sub Header Utility Bar */}
-        <View style={styles.utilityBar}>
-          <View style={styles.portalPill}>
-            <View style={styles.amberDot} />
-            <Text style={styles.portalPillText}>VERIFICATION PORTAL</Text>
-          </View>
-          <View style={styles.utilityActions}>
-            <View style={styles.helpAction}>
-              <Ionicons name="help-buoy-outline" size={14} color={AppColors.primary} />
-              <Text style={styles.helpActionText}>Helpdesk</Text>
-            </View>
-            <Text style={styles.utilityDot}>•</Text>
-            <TouchableOpacity onPress={handleLogout} activeOpacity={0.7}>
-              <Text style={styles.signOutLink}>Sign Out</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
-          
-          {/* Welcome Badge Header */}
-          <View style={styles.welcomeHero}>
-            <View style={styles.heroShieldBox}>
-              <Ionicons name="shield" size={44} color="#1E3A8A" />
-              <View style={styles.heroClockBadge}>
-                <Ionicons name="time" size={12} color="#FFFFFF" />
-              </View>
-            </View>
-
-            <View style={styles.pendingStatusBadge}>
-              <Ionicons name="hourglass" size={12} color="#B45309" />
-              <Text style={styles.pendingStatusBadgeText}>Status: PENDING_VERIFICATION</Text>
-            </View>
-
-            <Text style={styles.heroGreeting}>Welcome to Navodisha, {user?.fullName?.split(' ')[0] || 'Alumnus'}!</Text>
-            <Text style={styles.heroSubText}>
-              Your Navodaya lineage connects you to thousands of aspirational scholars. We are preparing your mentor profile.
-            </Text>
-          </View>
-
-          {/* Under Review Notice Banner */}
-          <View style={styles.noticeBanner}>
-            <View style={styles.noticeIconCircle}>
-              <Ionicons name="shield-outline" size={18} color="#B45309" />
-            </View>
-            <View style={styles.noticeTextCol}>
-              <Text style={styles.noticeTitle}>Profile under review by Platform Admin</Text>
-              <Text style={styles.noticeSub}>
-                To protect student safety, alumni and staff accounts are manually approved by Samiti administrators before mentorship access is granted.
-              </Text>
-              <View style={styles.slaBadge}>
-                <Ionicons name="flash" size={11} color="#D97706" />
-                <Text style={styles.slaText}>Typically reviewed within 24–48 hours</Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Add a Note for Admin Card */}
-          <View style={styles.noteCard}>
-            <View style={styles.noteHeaderRow}>
-              <View style={styles.noteTitleGroup}>
-                <Ionicons name="chatbox-ellipses-outline" size={16} color={AppColors.primary} />
-                <Text style={styles.noteTitle}>Add a note for the Admin</Text>
-              </View>
-              <Text style={styles.optionalTag}>Optional</Text>
-            </View>
-
-            <Text style={styles.noteHelper}>
-              Help us expedite your review by referencing your House, batchmates, or known JNV faculty.
-            </Text>
-
-            <View style={styles.noteInputBox}>
-              <TextInput
-                style={styles.noteInput}
-                value={adminNote}
-                onChangeText={setAdminNote}
-                multiline
-                placeholder="Class of 2014, Aravali House. Active in alumni WhatsApp chapter."
-                placeholderTextColor={AppColors.textMuted}
-                textAlignVertical="top"
-              />
-            </View>
-
-            <TouchableOpacity
-              style={styles.sendRequestBtn}
-              onPress={handleSubmitVerification}
-              disabled={submittingVerification}
-              activeOpacity={0.85}>
-              {submittingVerification ? (
-                <ActivityIndicator color="#FFFFFF" size="small" />
-              ) : (
-                <View style={styles.btnRow}>
-                  <Ionicons name="paper-plane-outline" size={16} color="#FFFFFF" />
-                  <Text style={styles.sendRequestText}>
-                    {verification ? 'Update Verification Note' : 'Send Verification Request'}
-                  </Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          </View>
-
-          {/* Submitted Profile Card */}
-          <View style={styles.submittedCard}>
-            <View style={styles.submittedHeader}>
-              <View style={styles.submittedTitleGroup}>
-                <Ionicons name="id-card-outline" size={18} color={AppColors.primary} />
-                <Text style={styles.submittedTitle}>Submitted Profile</Text>
-              </View>
-              <View style={styles.jnvIdBadge}>
-                <Text style={styles.jnvIdBadgeText}>JNV Verified ID</Text>
-              </View>
-            </View>
-
-            <View style={styles.profileItemRow}>
-              <View style={styles.profileMiniAvatar}>
-                <Text style={styles.profileMiniAvatarText}>
-                  {user?.fullName?.slice(0, 2).toUpperCase() || 'AL'}
-                </Text>
-              </View>
-              <View style={styles.profileMiniMeta}>
-                <View style={styles.profileNameRow}>
-                  <Text style={styles.profileMiniName}>{user?.fullName}</Text>
-                  <Ionicons name="star" size={14} color="#F59E0B" />
-                </View>
-                <Text style={styles.profileMiniSub}>
-                  Alumnus • Class of {fullProfile?.alumniDetails?.joinBatchYear || '2014'}
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.infoRowBlock}>
-              <Ionicons name="school-outline" size={16} color={AppColors.primary} style={styles.blockIcon} />
-              <View style={styles.blockTextCol}>
-                <Text style={styles.blockLabel}>Navodaya Vidyalaya</Text>
-                <Text style={styles.blockValue}>{user?.jnvName || 'JNV Gadchiroli'}</Text>
-                <Text style={styles.blockSub}>House: Aravali • Batch of 2014</Text>
-              </View>
-            </View>
-
-            <View style={styles.infoRowBlock}>
-              <Ionicons name="briefcase-outline" size={16} color={AppColors.primary} style={styles.blockIcon} />
-              <View style={styles.blockTextCol}>
-                <Text style={styles.blockLabel}>Current Profession</Text>
-                <Text style={styles.blockValue}>
-                  {fullProfile?.alumniDetails?.designation || 'Senior Software Engineer'}
-                </Text>
-                <Text style={styles.blockSub}>
-                  {fullProfile?.alumniDetails?.currentOrg || 'Google India'}, {fullProfile?.alumniDetails?.currentCity || 'Bengaluru'}
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.infoRowBlock}>
-              <Ionicons name="shield-checkmark-outline" size={16} color="#059669" style={styles.blockIcon} />
-              <View style={styles.phoneBlockRow}>
-                <View style={styles.blockTextCol}>
-                  <Text style={styles.blockLabel}>Phone</Text>
-                  <Text style={styles.blockValue}>{user?.phoneNumber}</Text>
-                </View>
-                <View style={styles.otpTag}>
-                  <Ionicons name="checkmark-sharp" size={12} color="#059669" />
-                  <Text style={styles.otpTagText}>OTP Verified</Text>
-                </View>
-              </View>
-            </View>
-
-            <View style={styles.editProfileRow}>
-              <Text style={styles.editPromptText}>Need to update these details?</Text>
-              <TouchableOpacity onPress={() => router.push('/register/alumni')} activeOpacity={0.7}>
-                <Text style={styles.editLinkText}>Edit Profile</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* Social Proof */}
-          <View style={styles.socialProofCard}>
-            <View style={styles.proofAvatarStack}>
-              <View style={[styles.proofAvatar, { backgroundColor: '#1E3A8A' }]}><Text style={styles.proofText}>RK</Text></View>
-              <View style={[styles.proofAvatar, { backgroundColor: '#059669', marginLeft: -8 }]}><Text style={styles.proofText}>PT</Text></View>
-              <View style={[styles.proofAvatar, { backgroundColor: '#B45309', marginLeft: -8 }]}><Text style={styles.proofText}>+34</Text></View>
-            </View>
-            <Text style={styles.proofCardText}>
-              Joined by <Text style={styles.proofBold}>36 JNV Gadchiroli Alumni</Text> guiding 240+ rural Navodaya students.
-            </Text>
-          </View>
-
-          {/* Check Status Refresh Button */}
-          <TouchableOpacity
-            style={styles.refreshBrownBtn}
-            onPress={onRefresh}
-            activeOpacity={0.85}>
-            <View style={styles.btnRow}>
-              <Ionicons name="refresh" size={18} color="#FFFFFF" />
-              <Text style={styles.refreshBrownBtnText}>Check Status / Refresh</Text>
-            </View>
-          </TouchableOpacity>
-        </ScrollView>
-      </SafeAreaView>
-    );
-  }
+  // Ensure currentTab is valid for current role
+  const isCurrentTabValid = tabs.some((t) => t.key === currentTab);
+  const activeTabKey = isCurrentTabValid ? currentTab : 'HOME';
 
   // =========================================================================
-  // VIEW 3: ACTIVE STUDENT DASHBOARD (Screenshot 3)
+  // RENDER CONTENT BASED ON ROLE AND ACTIVE TAB
   // =========================================================================
+
+  // Development phase badge helper
+  const renderDevBadge = (featureName: string) => (
+    <View style={styles.devBanner}>
+      <View style={styles.devIconBox}>
+        <Ionicons name="construct-outline" size={16} color={AppColors.primary} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.devBannerTitle}>{featureName} • In Active Development</Text>
+        <Text style={styles.devBannerSub}>
+          Interactive prototype preview connected to Navodisha Mentorship Engine.
+        </Text>
+      </View>
+    </View>
+  );
+
   return (
     <SafeAreaView style={styles.safeArea}>
-      {/* Top Header Bar */}
-      <View style={styles.studentTopBar}>
-        <View style={styles.brandTitleRow}>
-          <View style={styles.logoCircle}>
-            <Ionicons name="school" size={16} color={AppColors.primary} />
+      {/* Universal Top Bar with Role / JNV & Notification Bell */}
+      <View style={styles.topBar}>
+        <View style={styles.navTitleRow}>
+          <View style={styles.navLogo}>
+            <Ionicons
+              name={
+                isPlatformAdmin
+                  ? 'shield-checkmark'
+                  : isAccountPending
+                  ? 'shield-outline'
+                  : isStudent
+                  ? 'school'
+                  : isAlumnus
+                  ? 'ribbon'
+                  : 'business'
+              }
+              size={18}
+              color={isAccountPending ? '#D97706' : AppColors.primary}
+            />
           </View>
           <View>
-            <Text style={styles.brandTitle}>Navodisha</Text>
-            <Text style={styles.brandSubtitle}>CONNECT</Text>
-          </View>
-          <View style={styles.jnvNetworkPill}>
-            <View style={styles.greenDot} />
-            <Text style={styles.jnvNetworkText}>JNV Network</Text>
+            <Text style={styles.navTitle}>
+              {tabs.find((t) => t.key === activeTabKey)?.label || 'Navodisha Connect'}
+            </Text>
+            <Text style={styles.navSubtitle} numberOfLines={1}>
+              {isPlatformAdmin
+                ? 'Samiti Verification & Compliance'
+                : `${user?.jnvName || 'Navodaya Vidyalaya'} • ${user?.role?.replace('_', ' ')}`}
+            </Text>
           </View>
         </View>
 
+        {/* Right actions: Notifications Bell with Badge & Quick Sign Out in Profile */}
         <View style={styles.topBarRight}>
-          <TouchableOpacity style={styles.schoolPickerPill} activeOpacity={0.8}>
-            <Ionicons name="business" size={14} color="#D97706" />
-            <Text style={styles.schoolPickerText}>{user?.jnvName || 'JNV Gadchiroli'}</Text>
-            <Ionicons name="chevron-down" size={12} color="#64748B" />
+          <TouchableOpacity
+            style={styles.notificationBellBtn}
+            onPress={() => setShowNotificationsModal(true)}
+            activeOpacity={0.7}>
+            <Ionicons name="notifications-outline" size={22} color="#1E293B" />
+            {!notificationsRead && (
+              <View style={styles.bellBadge}>
+                <Text style={styles.bellBadgeText}>2</Text>
+              </View>
+            )}
           </TouchableOpacity>
-
-          <TouchableOpacity style={styles.bellBtn} activeOpacity={0.7}>
-            <Ionicons name="notifications-outline" size={20} color="#0F172A" />
-            <View style={styles.bellRedDot} />
-          </TouchableOpacity>
-
-          <View style={styles.studentAvatarCircle}>
-            <Text style={styles.studentAvatarText}>
-              {user?.fullName?.slice(0, 2).toUpperCase() || 'AS'}
-            </Text>
-          </View>
         </View>
       </View>
 
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
-        
-        {/* Student Profile Card */}
-        <View style={styles.studentProfileCard}>
-          <View style={styles.studentHeader}>
-            <View style={styles.studentAvatarLarge}>
-              <Text style={styles.studentAvatarLargeText}>
-                {user?.fullName?.slice(0, 2).toUpperCase() || 'AS'}
-              </Text>
-              <View style={styles.onlineDot} />
+      {/* Notifications Modal Sheet */}
+      <Modal
+        visible={showNotificationsModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowNotificationsModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <View style={styles.modalTitleRow}>
+                <Ionicons name="notifications" size={20} color={AppColors.primary} />
+                <Text style={styles.modalTitle}>Notifications</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowNotificationsModal(false)}>
+                <Ionicons name="close" size={24} color="#64748B" />
+              </TouchableOpacity>
             </View>
 
-            <View style={styles.studentMetaCol}>
-              <View style={styles.studentNameBadgeRow}>
-                <Text style={styles.studentNameText}>{user?.fullName || 'Aarav Sharma'}</Text>
-                <View style={styles.activeStudentBadge}>
-                  <View style={styles.activeStudentDot} />
-                  <Text style={styles.activeStudentText}>Active Student</Text>
+            <ScrollView style={{ maxHeight: 380, paddingVertical: 8 }}>
+              <View style={styles.notificationItem}>
+                <View style={[styles.notifDot, { backgroundColor: AppColors.primary }]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.notifTitle}>Welcome to Navodisha Connect! 🌟</Text>
+                  <Text style={styles.notifBody}>
+                    Your academic profile is successfully registered under {user?.jnvName}.
+                  </Text>
+                  <Text style={styles.notifTime}>Just now</Text>
                 </View>
               </View>
-              <Text style={styles.scholarRollText}>Navodaya Scholar • Roll 1024</Text>
-            </View>
-          </View>
 
-          <View style={styles.studentTagsRow}>
-            <View style={styles.tagBlue}>
-              <Ionicons name="school" size={12} color={AppColors.primary} />
-              <Text style={styles.tagBlueText}>
-                {fullProfile?.studentDetails?.classLevel || 'Class 12'} • {fullProfile?.studentDetails?.stream || 'Science PCM'}
-              </Text>
-            </View>
-            <View style={styles.tagHouse}>
-              <View style={[styles.houseDot, { backgroundColor: '#1E40AF' }]} />
-              <Text style={styles.tagHouseText}>{fullProfile?.studentDetails?.house || 'Aravali'} House</Text>
-            </View>
-            <View style={styles.tagLocation}>
-              <Ionicons name="pin" size={11} color="#EF4444" />
-              <Text style={styles.tagLocationText}>Maharashtra</Text>
-            </View>
-          </View>
+              <View style={styles.notificationItem}>
+                <View style={[styles.notifDot, { backgroundColor: '#059669' }]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.notifTitle}>Alumni Mentorship Network Active</Text>
+                  <Text style={styles.notifBody}>
+                    Over 500+ verified JNV alumni across IITs, AIIMS, and top industries are ready to guide you.
+                  </Text>
+                  <Text style={styles.notifTime}>2 hours ago</Text>
+                </View>
+              </View>
+            </ScrollView>
 
-          <View style={styles.strengthBox}>
-            <Ionicons name="ribbon-outline" size={16} color="#B45309" />
-            <Text style={styles.strengthLabel}>Navodaya Profile Strength</Text>
-            <Text style={styles.strengthValue}>100% Complete</Text>
-          </View>
-        </View>
-
-        {/* Preparing For Section */}
-        <View style={styles.goalsSection}>
-          <View style={styles.goalsHeader}>
-            <View style={styles.goalsTitleRow}>
-              <Ionicons name="disc" size={16} color="#B45309" />
-              <Text style={styles.goalsTitle}>Preparing For:</Text>
-            </View>
-            <Text style={styles.batchYearText}>Batch 2024-25</Text>
-          </View>
-
-          <View style={styles.goalsPillsRow}>
-            <View style={[styles.goalPill, { backgroundColor: '#FEF3C7' }]}>
-              <Ionicons name="radio-button-on" size={12} color="#D97706" />
-              <Text style={[styles.goalPillText, { color: '#B45309' }]}>JEE Advanced</Text>
-            </View>
-            <View style={[styles.goalPill, { backgroundColor: '#FEF3C7' }]}>
-              <Ionicons name="medal" size={12} color="#D97706" />
-              <Text style={[styles.goalPillText, { color: '#B45309' }]}>NDA 2025</Text>
-            </View>
-            <TouchableOpacity style={styles.addGoalBtn} activeOpacity={0.7}>
-              <Ionicons name="add" size={14} color="#64748B" />
-              <Text style={styles.addGoalText}>Add Exam Goal</Text>
+            <TouchableOpacity
+              style={styles.markReadBtn}
+              onPress={() => {
+                setNotificationsRead(true);
+                setShowNotificationsModal(false);
+              }}>
+              <Text style={styles.markReadBtnText}>Mark All as Read</Text>
             </TouchableOpacity>
           </View>
         </View>
+      </Modal>
 
-        {/* Mentorship Discovery Hero Card */}
-        <View style={styles.discoveryCard}>
-          <View style={styles.discoveryBadge}>
-            <Ionicons name="hand-right" size={16} color="#D97706" />
-            <Text style={styles.discoveryBadgeText}>MENTORSHIP DISCOVERY</Text>
-          </View>
+      {/* Main Tab Screen Content */}
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
 
-          <Text style={styles.discoveryTitle}>Welcome to Navodisha Connect!</Text>
-          <Text style={styles.discoverySub}>
-            Your profile is complete and ready for mentorship matching. You have direct access to{' '}
-            <Text style={styles.discoveryBold}>142 verified alumni mentors</Text> from IITs, AIIMS, and top industries eager to guide junior Navodayans.
-          </Text>
+        {/* =========================================================================
+            PROFILE TAB (For all roles: shifts existing profile details here)
+           ========================================================================= */}
+        {activeTabKey === 'PROFILE' && (
+          <>
+            {/* Student Profile Content */}
+            {isStudent && (
+              <>
+                <View style={styles.card}>
+                  <View style={styles.studentHeaderRow}>
+                    <View style={styles.avatarCircle}>
+                      <Text style={styles.avatarText}>{user?.fullName?.slice(0, 2).toUpperCase()}</Text>
+                    </View>
+                    <View style={styles.studentInfoCol}>
+                      <View style={styles.nameTagRow}>
+                        <Text style={styles.studentName}>{user?.fullName}</Text>
+                        <View style={styles.activeStudentPill}>
+                          <Text style={styles.activeStudentPillText}>Active Student</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.studentSubText}>
+                        {user?.jnvName} • {user?.phoneNumber}
+                      </Text>
+                    </View>
+                  </View>
 
-          <View style={styles.mentorInstitutionsRow}>
-            <View style={styles.miniAvatarsRow}>
-              <View style={[styles.miniAvatar, { backgroundColor: '#1E3A8A' }]}><Text style={styles.miniText}>RK</Text></View>
-              <View style={[styles.miniAvatar, { backgroundColor: '#B45309', marginLeft: -6 }]}><Text style={styles.miniText}>PT</Text></View>
-              <View style={[styles.miniAvatar, { backgroundColor: '#059669', marginLeft: -6 }]}><Text style={styles.miniText}>SM</Text></View>
-              <View style={[styles.miniAvatar, { backgroundColor: '#475569', marginLeft: -6 }]}><Text style={styles.miniText}>+139</Text></View>
+                  <View style={styles.divider} />
+
+                  <View style={styles.detailRow}>
+                    <Ionicons name="book-outline" size={16} color={AppColors.primary} />
+                    <Text style={styles.detailLabel}>Class & Stream:</Text>
+                    <Text style={styles.detailValue}>
+                      {fullProfile?.studentDetails?.classLevel || 'Class 12'} {fullProfile?.studentDetails?.stream ? `• ${fullProfile.studentDetails.stream}` : ''}
+                    </Text>
+                  </View>
+
+                  <View style={styles.detailRow}>
+                    <Ionicons name="home-outline" size={16} color={AppColors.primary} />
+                    <Text style={styles.detailLabel}>JNV House:</Text>
+                    <Text style={styles.detailValue}>
+                      {fullProfile?.studentDetails?.house ? `${fullProfile.studentDetails.house} House` : 'Not Set'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.detailRow}>
+                    <Ionicons name="calendar-outline" size={16} color={AppColors.primary} />
+                    <Text style={styles.detailLabel}>Admission Batch:</Text>
+                    <Text style={styles.detailValue}>
+                      {fullProfile?.studentDetails?.joinBatchYear ? `Class of ${fullProfile.studentDetails.joinBatchYear}` : 'Not Set'}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Target Goals */}
+                <View style={styles.card}>
+                  <View style={styles.cardTitleRow}>
+                    <Ionicons name="flag-outline" size={18} color="#D97706" />
+                    <Text style={styles.cardTitle}>Preparing For / Target Exams</Text>
+                  </View>
+                  <View style={styles.tagsContainer}>
+                    {fullProfile?.studentDetails?.preparingFor && fullProfile.studentDetails.preparingFor.length > 0 ? (
+                      fullProfile.studentDetails.preparingFor.map((goal) => (
+                        <View key={goal} style={styles.goalTag}>
+                          <Ionicons name="checkmark-circle" size={14} color="#D97706" />
+                          <Text style={styles.goalTagText}>{goal}</Text>
+                        </View>
+                      ))
+                    ) : (
+                      <Text style={styles.mutedText}>No target exams specified yet.</Text>
+                    )}
+                  </View>
+                </View>
+
+                {/* Settings & Language Options */}
+                <View style={styles.card}>
+                  <View style={styles.cardTitleRow}>
+                    <Ionicons name="settings-outline" size={18} color={AppColors.primary} />
+                    <Text style={styles.cardTitle}>App Settings & Preferences</Text>
+                  </View>
+                  <View style={styles.detailRow}>
+                    <Ionicons name="language-outline" size={16} color="#64748B" />
+                    <Text style={styles.detailLabel}>App Language:</Text>
+                    <Text style={styles.detailValue}>English (Default)</Text>
+                  </View>
+                  <View style={styles.detailRow}>
+                    <Ionicons name="notifications-outline" size={16} color="#64748B" />
+                    <Text style={styles.detailLabel}>Session Reminders:</Text>
+                    <Text style={styles.detailValue}>SMS & In-App</Text>
+                  </View>
+                </View>
+
+                {/* Actions */}
+                <TouchableOpacity
+                  style={styles.primaryBtn}
+                  onPress={() => router.push('/register/student')}
+                  activeOpacity={0.85}>
+                  <View style={styles.btnContent}>
+                    <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+                    <Text style={styles.primaryBtnText}>Update Academic Profile</Text>
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8}>
+                  <Ionicons name="log-out-outline" size={18} color="#DC2626" />
+                  <Text style={styles.logoutButtonText}>Log Out</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {/* Active Alumnus Profile Content */}
+            {isAlumnus && !isAccountPending && (
+              <>
+                <View style={styles.card}>
+                  <View style={styles.mentorHeaderRow}>
+                    <View style={styles.avatarCircle}>
+                      <Text style={styles.avatarText}>{user?.fullName?.slice(0, 2).toUpperCase()}</Text>
+                    </View>
+                    <View style={styles.mentorInfoCol}>
+                      <View style={styles.nameTagRow}>
+                        <Text style={styles.mentorName}>{user?.fullName}</Text>
+                        <View style={styles.verifiedTag}>
+                          <Ionicons name="checkmark-circle" size={14} color="#059669" />
+                          <Text style={styles.verifiedTagText}>Verified Mentor</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.mentorOrgText}>
+                        {fullProfile?.alumniDetails?.designation || 'Alumnus'} • {fullProfile?.alumniDetails?.currentOrg || 'Industry Professional'}
+                      </Text>
+                      <Text style={styles.mentorSubText}>
+                        {user?.jnvName} • Class of {fullProfile?.alumniDetails?.joinBatchYear || '2014'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.divider} />
+
+                  <View style={styles.toggleRow}>
+                    <View style={styles.toggleTextCol}>
+                      <Text style={styles.toggleLabel}>Open to Guide Students</Text>
+                      <Text style={styles.toggleSub}>
+                        Allow junior scholars from JNV to discover and contact you
+                      </Text>
+                    </View>
+                    <Switch
+                      value={fullProfile?.alumniDetails?.openToHelp ?? true}
+                      onValueChange={handleToggleMentorAvailability}
+                      trackColor={{ false: '#CBD5E1', true: AppColors.primary }}
+                      thumbColor="#FFFFFF"
+                    />
+                  </View>
+                </View>
+
+                {/* Mentorship Focus */}
+                <View style={styles.card}>
+                  <View style={styles.cardTitleRow}>
+                    <Ionicons name="book-outline" size={18} color={AppColors.primary} />
+                    <Text style={styles.cardTitle}>Mentorship Domains</Text>
+                  </View>
+                  <View style={styles.tagsContainer}>
+                    {fullProfile?.alumniDetails?.provideMentorshipsOn && fullProfile.alumniDetails.provideMentorshipsOn.length > 0 ? (
+                      fullProfile.alumniDetails.provideMentorshipsOn.map((topic) => (
+                        <View key={topic} style={styles.tagItem}>
+                          <Text style={styles.tagItemText}>{topic}</Text>
+                        </View>
+                      ))
+                    ) : (
+                      <Text style={styles.mutedText}>No domains selected yet.</Text>
+                    )}
+                  </View>
+
+                  <View style={styles.divider} />
+
+                  <View style={styles.cardTitleRow}>
+                    <Ionicons name="videocam-outline" size={18} color={AppColors.primary} />
+                    <Text style={styles.cardTitle}>Preferred Guidance Modes</Text>
+                  </View>
+                  <View style={styles.tagsContainer}>
+                    {fullProfile?.alumniDetails?.willingModes && fullProfile.alumniDetails.willingModes.length > 0 ? (
+                      fullProfile.alumniDetails.willingModes.map((mode) => (
+                        <View key={mode} style={styles.modeItem}>
+                          <Ionicons name="checkmark-sharp" size={12} color="#059669" />
+                          <Text style={styles.modeItemText}>{mode}</Text>
+                        </View>
+                      ))
+                    ) : (
+                      <Text style={styles.mutedText}>No modes selected yet.</Text>
+                    )}
+                  </View>
+                </View>
+
+                {/* Bio */}
+                {fullProfile?.alumniDetails?.bio && (
+                  <View style={styles.card}>
+                    <View style={styles.cardTitleRow}>
+                      <Ionicons name="document-text-outline" size={18} color={AppColors.primary} />
+                      <Text style={styles.cardTitle}>About / Guidance Philosophy</Text>
+                    </View>
+                    <Text style={styles.bioText}>{fullProfile.alumniDetails.bio}</Text>
+                  </View>
+                )}
+
+                {/* Actions */}
+                <TouchableOpacity
+                  style={styles.primaryBtn}
+                  onPress={() => router.push('/register/alumni')}
+                  activeOpacity={0.85}>
+                  <View style={styles.btnContent}>
+                    <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+                    <Text style={styles.primaryBtnText}>Update Mentorship Profile</Text>
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8}>
+                  <Ionicons name="log-out-outline" size={18} color="#DC2626" />
+                  <Text style={styles.logoutButtonText}>Log Out</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {/* Active JNV Admin / Staff Profile Content */}
+            {isJnvAdmin && !isAccountPending && (
+              <>
+                <View style={styles.card}>
+                  <View style={styles.mentorHeaderRow}>
+                    <View style={styles.avatarCircle}>
+                      <Text style={styles.avatarText}>{user?.fullName?.slice(0, 2).toUpperCase()}</Text>
+                    </View>
+                    <View style={styles.mentorInfoCol}>
+                      <View style={styles.nameTagRow}>
+                        <Text style={styles.mentorName}>{user?.fullName}</Text>
+                        <View style={styles.verifiedTag}>
+                          <Ionicons name="checkmark-circle" size={14} color="#059669" />
+                          <Text style={styles.verifiedTagText}>Active Faculty</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.mentorOrgText}>
+                        {fullProfile?.jnvAdminDetails?.designation || 'Staff'} • {user?.jnvName}
+                      </Text>
+                      <Text style={styles.mentorSubText}>
+                        Coordinator Status:{' '}
+                        {fullProfile?.jnvAdminDetails?.isAlumniCoordinator ? 'Designated Alumni Coordinator' : 'Faculty Member'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                <View style={styles.card}>
+                  <View style={styles.cardTitleRow}>
+                    <Ionicons name="shield-checkmark-outline" size={18} color={AppColors.primary} />
+                    <Text style={styles.cardTitle}>Vidyalaya Faculty Privileges</Text>
+                  </View>
+                  <View style={styles.complianceItem}>
+                    <Ionicons name="checkmark-circle" size={16} color="#059669" />
+                    <Text style={styles.complianceText}>
+                      Authorized JNV Faculty member for {user?.jnvName}
+                    </Text>
+                  </View>
+                  {fullProfile?.jnvAdminDetails?.isAlumniCoordinator && (
+                    <View style={styles.complianceItem}>
+                      <Ionicons name="ribbon" size={16} color="#B45309" />
+                      <Text style={styles.complianceText}>
+                        Designated Alumni Coordinator privileges assigned
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
+                {/* Actions */}
+                <TouchableOpacity
+                  style={styles.primaryBtn}
+                  onPress={() => router.push('/register/staff')}
+                  activeOpacity={0.85}>
+                  <View style={styles.btnContent}>
+                    <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+                    <Text style={styles.primaryBtnText}>Update Staff Designation</Text>
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8}>
+                  <Ionicons name="log-out-outline" size={18} color="#DC2626" />
+                  <Text style={styles.logoutButtonText}>Log Out</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {/* Pending Verification Profile Content (for Alumnus or JNV Admin waiting approval) */}
+            {isAccountPending && (
+              <>
+                <View style={styles.card}>
+                  <View style={styles.studentHeaderRow}>
+                    <View style={[styles.avatarCircle, { backgroundColor: '#FEF3C7' }]}>
+                      <Text style={[styles.avatarText, { color: '#B45309' }]}>
+                        {user?.fullName?.slice(0, 2).toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={styles.studentInfoCol}>
+                      <Text style={styles.studentName}>{user?.fullName}</Text>
+                      <Text style={styles.studentSubText}>
+                        {user?.role?.replace('_', ' ')} • {user?.jnvName}
+                      </Text>
+                      <View style={[styles.statusBadgeWarning, { alignSelf: 'flex-start', marginTop: 4 }]}>
+                        <Text style={styles.statusBadgeWarningText}>Verification Pending</Text>
+                      </View>
+                    </View>
+                  </View>
+
+                  <View style={styles.divider} />
+
+                  <View style={styles.detailRow}>
+                    <Ionicons name="call-outline" size={16} color={AppColors.primary} />
+                    <Text style={styles.detailLabel}>Registered Phone:</Text>
+                    <Text style={styles.detailValue}>{user?.phoneNumber}</Text>
+                  </View>
+
+                  <View style={styles.detailRow}>
+                    <Ionicons name="business-outline" size={16} color={AppColors.primary} />
+                    <Text style={styles.detailLabel}>Navodaya School:</Text>
+                    <Text style={styles.detailValue}>{user?.jnvName}</Text>
+                  </View>
+
+                  {isAlumnus && fullProfile?.alumniDetails && (
+                    <>
+                      <View style={styles.detailRow}>
+                        <Ionicons name="briefcase-outline" size={16} color={AppColors.primary} />
+                        <Text style={styles.detailLabel}>Organization:</Text>
+                        <Text style={styles.detailValue}>
+                          {fullProfile.alumniDetails.currentOrg || 'Not specified'}
+                        </Text>
+                      </View>
+                      <View style={styles.detailRow}>
+                        <Ionicons name="calendar-outline" size={16} color={AppColors.primary} />
+                        <Text style={styles.detailLabel}>Passout Batch:</Text>
+                        <Text style={styles.detailValue}>
+                          Class of {fullProfile.alumniDetails.joinBatchYear}
+                        </Text>
+                      </View>
+                    </>
+                  )}
+
+                  {isJnvAdmin && fullProfile?.jnvAdminDetails && (
+                    <View style={styles.detailRow}>
+                      <Ionicons name="school-outline" size={16} color={AppColors.primary} />
+                      <Text style={styles.detailLabel}>Designation:</Text>
+                      <Text style={styles.detailValue}>
+                        {fullProfile.jnvAdminDetails.designation}
+                      </Text>
+                    </View>
+                  )}
+
+                  <TouchableOpacity
+                    style={styles.editProfileBtn}
+                    onPress={() => router.push(isAlumnus ? '/register/alumni' : '/register/staff')}
+                    activeOpacity={0.8}>
+                    <Ionicons name="create-outline" size={16} color={AppColors.primary} />
+                    <Text style={styles.editProfileBtnText}>Edit Profile Details</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8}>
+                  <Ionicons name="log-out-outline" size={18} color="#DC2626" />
+                  <Text style={styles.logoutButtonText}>Log Out</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {/* Platform Admin Profile Content */}
+            {isPlatformAdmin && (
+              <>
+                <View style={styles.card}>
+                  <View style={styles.studentHeaderRow}>
+                    <View style={[styles.avatarCircle, { backgroundColor: '#EEF2FF' }]}>
+                      <Ionicons name="shield-checkmark" size={24} color={AppColors.primary} />
+                    </View>
+                    <View style={styles.studentInfoCol}>
+                      <Text style={styles.studentName}>{user?.fullName || 'Platform Administrator'}</Text>
+                      <Text style={styles.studentSubText}>Navodaya Vidyalaya Samiti HQ</Text>
+                      <View style={[styles.statusBadgeSuccess, { alignSelf: 'flex-start', marginTop: 4 }]}>
+                        <Text style={styles.statusBadgeSuccessText}>Superadmin Access Active</Text>
+                      </View>
+                    </View>
+                  </View>
+
+                  <View style={styles.divider} />
+
+                  <View style={styles.detailRow}>
+                    <Ionicons name="call-outline" size={16} color={AppColors.primary} />
+                    <Text style={styles.detailLabel}>Registered Phone:</Text>
+                    <Text style={styles.detailValue}>{user?.phoneNumber || '+91 9999999999'}</Text>
+                  </View>
+
+                  <View style={styles.detailRow}>
+                    <Ionicons name="shield-outline" size={16} color={AppColors.primary} />
+                    <Text style={styles.detailLabel}>Authority Role:</Text>
+                    <Text style={styles.detailValue}>Platform Admin (Samiti HQ)</Text>
+                  </View>
+
+                  <View style={styles.detailRow}>
+                    <Ionicons name="key-outline" size={16} color={AppColors.primary} />
+                    <Text style={styles.detailLabel}>Audit Level:</Text>
+                    <Text style={styles.detailValue}>Full Verification & Compliance</Text>
+                  </View>
+                </View>
+
+                <View style={styles.card}>
+                  <View style={styles.cardTitleRow}>
+                    <Ionicons name="lock-closed-outline" size={18} color={AppColors.primary} />
+                    <Text style={styles.cardTitle}>System Security & Privileges</Text>
+                  </View>
+                  <Text style={styles.cardHelperText}>
+                    Platform Administrator session protected with 2FA token authentication and role-based access control.
+                  </Text>
+                  <View style={styles.complianceItem}>
+                    <Ionicons name="checkmark-circle" size={16} color="#059669" />
+                    <Text style={styles.complianceText}>
+                      Authorized to approve/reject alumni & staff verification requests
+                    </Text>
+                  </View>
+                  <View style={styles.complianceItem}>
+                    <Ionicons name="checkmark-circle" size={16} color="#059669" />
+                    <Text style={styles.complianceText}>
+                      Authorized to suspend or activate platform user accounts
+                    </Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8}>
+                  <Ionicons name="log-out-outline" size={18} color="#DC2626" />
+                  <Text style={styles.logoutButtonText}>Sign Out of Admin Console</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </>
+        )}
+
+        {/* =========================================================================
+            PENDING VERIFICATION HOME TAB (Only 2 tabs visible: Home & Profile)
+           ========================================================================= */}
+        {isAccountPending && activeTabKey === 'HOME' && (
+          <>
+            <View style={[styles.statusHeroCard, verification?.status === 'REJECTED' && styles.statusHeroCardRejected]}>
+              <View style={[styles.statusIconCircle, verification?.status === 'REJECTED' && styles.statusIconCircleRejected]}>
+                <Ionicons
+                  name={verification?.status === 'REJECTED' ? 'close-circle' : 'hourglass-outline'}
+                  size={36}
+                  color={verification?.status === 'REJECTED' ? '#DC2626' : '#D97706'}
+                />
+              </View>
+
+              <View style={[styles.statusBadge, verification?.status === 'REJECTED' && styles.statusBadgeRejected]}>
+                <Text style={[styles.statusBadgeText, verification?.status === 'REJECTED' && styles.statusBadgeTextRejected]}>
+                  Status: {verification?.status || user?.status}
+                </Text>
+              </View>
+
+              <Text style={styles.statusGreeting}>
+                Welcome to Navodisha, {user?.fullName?.split(' ')[0] || 'Member'}!
+              </Text>
+
+              <Text style={styles.statusDescription}>
+                {verification?.status === 'REJECTED'
+                  ? 'Your verification was reviewed and requires updated information. Please update your remarks or contact your regional office.'
+                  : 'To ensure student safety, accounts with mentorship or administrative privileges are verified by Samiti administrators before access is granted.'}
+              </Text>
+
+              {verification?.remarks && (
+                <View style={styles.adminFeedbackBox}>
+                  <Ionicons name="information-circle-outline" size={16} color="#1E3A8A" />
+                  <Text style={styles.adminFeedbackText}>
+                    Recorded Note: "{verification.remarks}"
+                  </Text>
+                </View>
+              )}
             </View>
-            <Text style={styles.institutionsText}>IIT Delhi • AIIMS Nagpur • ISRO</Text>
-          </View>
 
-          <TouchableOpacity style={styles.browseMentorsBtn} activeOpacity={0.85}>
-            <Text style={styles.browseMentorsText}>Browse Recommended Mentors</Text>
-            <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
-          </TouchableOpacity>
-        </View>
+            <View style={styles.card}>
+              <View style={styles.cardTitleRow}>
+                <Ionicons name="create-outline" size={18} color={AppColors.primary} />
+                <Text style={styles.cardTitle}>Note for Platform Admin (Optional)</Text>
+              </View>
+              <Text style={styles.cardHelperText}>
+                Reference your batch, House, or known faculty to expedite verification.
+              </Text>
 
-        {/* Quick Actions Grid (2x2) */}
-        <Text style={styles.quickActionsTitle}>Quick Actions</Text>
-        <View style={styles.quickGrid}>
-          <TouchableOpacity style={styles.quickCard} activeOpacity={0.8}>
-            <View style={[styles.quickIconCircle, { backgroundColor: '#EFF6FF' }]}>
-              <Ionicons name="people" size={20} color={AppColors.primary} />
+              <TextInput
+                style={styles.remarksInput}
+                value={adminNote}
+                onChangeText={setAdminNote}
+                placeholder="e.g. Class of 2014, Aravali House. Verified with Principal Sir."
+                placeholderTextColor={AppColors.textMuted}
+                multiline
+                textAlignVertical="top"
+              />
+
+              <TouchableOpacity
+                style={styles.primaryBtn}
+                onPress={handleSubmitVerification}
+                disabled={submittingVerification}
+                activeOpacity={0.85}>
+                {submittingVerification ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <View style={styles.btnContent}>
+                    <Ionicons name="send" size={16} color="#FFFFFF" />
+                    <Text style={styles.primaryBtnText}>
+                      {verification ? 'Update Verification Note' : 'Submit Verification Request'}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
             </View>
-            <Text style={styles.quickCardName}>Find a Mentor</Text>
-            <Text style={styles.quickCardDesc}>Filter by batch & stream</Text>
-          </TouchableOpacity>
 
-          <TouchableOpacity style={styles.quickCard} activeOpacity={0.8}>
-            <View style={[styles.quickIconCircle, { backgroundColor: '#FEF3C7' }]}>
-              <Ionicons name="help-circle" size={20} color="#D97706" />
+            <TouchableOpacity style={styles.refreshBtn} onPress={onRefresh} activeOpacity={0.85}>
+              <Ionicons name="refresh" size={18} color="#FFFFFF" />
+              <Text style={styles.refreshBtnText}>Check Status / Refresh</Text>
+            </TouchableOpacity>
+          </>
+        )}
+
+        {/* =========================================================================
+            PLATFORM ADMIN TAB 1: VERIFICATIONS (HOME)
+           ========================================================================= */}
+        {isPlatformAdmin && activeTabKey === 'HOME' && (
+          <>
+            <View style={styles.statsGrid}>
+              <View style={styles.statBox}>
+                <Text style={styles.statNumber}>{adminRequests.length}</Text>
+                <Text style={styles.statLabel}>Pending Queue</Text>
+              </View>
+              <View style={styles.statBox}>
+                <Text style={styles.statNumber}>{pendingUsers.length}</Text>
+                <Text style={styles.statLabel}>Pending Users</Text>
+              </View>
+              <View style={styles.statBox}>
+                <Text style={styles.statNumber}>650+</Text>
+                <Text style={styles.statLabel}>Active JNVs</Text>
+              </View>
             </View>
-            <Text style={styles.quickCardName}>Ask a Query</Text>
-            <Text style={styles.quickCardDesc}>Senior alumni response</Text>
-          </TouchableOpacity>
 
-          <TouchableOpacity style={styles.quickCard} activeOpacity={0.8}>
-            <View style={[styles.quickIconCircle, { backgroundColor: '#EFF6FF' }]}>
-              <Ionicons name="library" size={20} color={AppColors.primary} />
+            {adminRequests.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <Ionicons name="checkmark-done-circle-outline" size={48} color="#059669" />
+                <Text style={styles.emptyTitle}>Verification Queue Clear!</Text>
+                <Text style={styles.emptySubtitle}>
+                  All submitted alumnus and staff verification requests have been processed.
+                </Text>
+              </View>
+            ) : (
+              activeReq && (
+                <View style={styles.card}>
+                  <View style={styles.badgeRow}>
+                    <View style={styles.statusBadgeWarning}>
+                      <Text style={styles.statusBadgeWarningText}>Awaiting Review</Text>
+                    </View>
+                    <Text style={styles.queueCounter}>
+                      {activeReviewIndex + 1} of {adminRequests.length}
+                    </Text>
+                  </View>
+
+                  <Text style={styles.applicantName}>{activeReq.userName}</Text>
+                  <Text style={styles.applicantSub}>{activeReq.userRole} • {activeReq.jnvName}</Text>
+
+                  {activeReq.remarks && (
+                    <View style={styles.adminFeedbackBox}>
+                      <Text style={styles.adminFeedbackLabel}>Applicant Affiliation Note:</Text>
+                      <Text style={styles.adminFeedbackText}>"{activeReq.remarks}"</Text>
+                    </View>
+                  )}
+
+                  <View style={styles.actionRow}>
+                    <TouchableOpacity
+                      style={styles.approveBtn}
+                      onPress={() => handleReviewVerification(activeReq.id, 'APPROVED')}
+                      disabled={processingId === activeReq.id}
+                      activeOpacity={0.8}>
+                      <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
+                      <Text style={styles.approveBtnText}>Approve Member</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.rejectBtn}
+                      onPress={() => handleReviewVerification(activeReq.id, 'REJECTED')}
+                      disabled={processingId === activeReq.id}
+                      activeOpacity={0.8}>
+                      <Ionicons name="close-circle" size={18} color="#DC2626" />
+                      <Text style={styles.rejectBtnText}>Reject</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {adminRequests.length > 1 && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>
+                      <TouchableOpacity
+                        style={[styles.smallFilterPill, activeReviewIndex === 0 && { opacity: 0.4 }]}
+                        disabled={activeReviewIndex === 0}
+                        onPress={() => setActiveReviewIndex((prev) => Math.max(0, prev - 1))}>
+                        <Text style={styles.smallFilterPillText}>‹ Previous Applicant</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[styles.smallFilterPill, activeReviewIndex >= adminRequests.length - 1 && { opacity: 0.4 }]}
+                        disabled={activeReviewIndex >= adminRequests.length - 1}
+                        onPress={() => setActiveReviewIndex((prev) => Math.min(adminRequests.length - 1, prev + 1))}>
+                        <Text style={styles.smallFilterPillText}>Next Applicant ›</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              )
+            )}
+
+            {renderDevBadge('Samiti Verification Console')}
+          </>
+        )}
+
+        {/* =========================================================================
+            PLATFORM ADMIN TAB 2: USERS
+           ========================================================================= */}
+        {isPlatformAdmin && activeTabKey === 'USERS' && (
+          <>
+            <View style={styles.card}>
+              <View style={styles.sectionHeaderRow}>
+                <View style={styles.sectionTitleGroup}>
+                  <Ionicons name="people" size={18} color={AppColors.primary} />
+                  <Text style={styles.sectionTitle}>User Access Management</Text>
+                </View>
+                <View style={styles.badgeCount}>
+                  <Text style={styles.badgeCountText}>{pendingUsers.length} Users</Text>
+                </View>
+              </View>
+              <Text style={styles.cardHelperText}>
+                Review registered accounts across all JNVs. Activate or suspend user privileges.
+              </Text>
             </View>
-            <Text style={styles.quickCardName}>JNV Study Circles</Text>
-            <Text style={styles.quickCardDesc}>PCM peer groups</Text>
-          </TouchableOpacity>
 
-          <TouchableOpacity style={styles.quickCard} activeOpacity={0.8}>
-            <View style={[styles.quickIconCircle, { backgroundColor: '#EEF2FF' }]}>
-              <Ionicons name="calendar" size={20} color={AppColors.primary} />
+            {pendingUsers.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <Ionicons name="people-outline" size={48} color="#64748B" />
+                <Text style={styles.emptyTitle}>No Pending Accounts</Text>
+                <Text style={styles.emptySubtitle}>All registered platform users have active status.</Text>
+              </View>
+            ) : (
+              pendingUsers.map((item) => (
+                <View key={item.id} style={styles.card}>
+                  <Text style={styles.applicantName}>{item.fullName}</Text>
+                  <Text style={styles.applicantSub}>{item.role} • {item.jnvName}</Text>
+                  <View style={styles.userActionRow}>
+                    <TouchableOpacity
+                      style={styles.activateSmallBtn}
+                      onPress={() => handleUpdateUserStatus(item.id, 'ACTIVE')}
+                      disabled={processingId === item.id}
+                      activeOpacity={0.8}>
+                      <Ionicons name="checkmark" size={14} color="#FFFFFF" />
+                      <Text style={styles.activateSmallBtnText}>Activate User</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.suspendSmallBtn}
+                      onPress={() => handleUpdateUserStatus(item.id, 'SUSPENDED')}
+                      disabled={processingId === item.id}
+                      activeOpacity={0.8}>
+                      <Ionicons name="ban" size={14} color="#DC2626" />
+                      <Text style={styles.suspendSmallBtnText}>Suspend</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))
+            )}
+
+            {renderDevBadge('User Directory & Access Control')}
+          </>
+        )}
+
+        {/* =========================================================================
+            PLATFORM ADMIN TAB 3: REPORTS
+           ========================================================================= */}
+        {isPlatformAdmin && activeTabKey === 'REPORTS' && (
+          <>
+            <View style={styles.card}>
+              <View style={styles.cardTitleRow}>
+                <Ionicons name="analytics" size={18} color={AppColors.primary} />
+                <Text style={styles.cardTitle}>Navodisha System Compliance Report</Text>
+              </View>
+              <Text style={styles.cardHelperText}>
+                National verification metrics and mentorship engagement statistics across all regions.
+              </Text>
             </View>
-            <Text style={styles.quickCardName}>Upcoming Webinars</Text>
-            <Text style={styles.quickCardDesc}>Sunday career AMA</Text>
-          </TouchableOpacity>
-        </View>
 
-        {/* Navodaya Motto Banner */}
-        <View style={styles.mottoCard}>
-          <View style={styles.mottoIconCircle}>
-            <Ionicons name="bulb-outline" size={18} color="#D97706" />
-          </View>
-          <View style={styles.mottoTextCol}>
-            <Text style={styles.mottoLabel}>Navodaya Motto</Text>
-            <Text style={styles.mottoQuote}>"Pragyanam Brahma — Pure Knowledge is the Divine"</Text>
-          </View>
-        </View>
+            <View style={styles.statsGrid}>
+              <View style={styles.statBox}>
+                <Text style={styles.statNumber}>98.4%</Text>
+                <Text style={styles.statLabel}>Compliance Rate</Text>
+              </View>
+              <View style={styles.statBox}>
+                <Text style={styles.statNumber}>4.2k</Text>
+                <Text style={styles.statLabel}>Verified Alumni</Text>
+              </View>
+              <View style={styles.statBox}>
+                <Text style={styles.statNumber}>18.5k</Text>
+                <Text style={styles.statLabel}>Active Scholars</Text>
+              </View>
+            </View>
+
+            <View style={styles.card}>
+              <View style={styles.cardTitleRow}>
+                <Ionicons name="shield-checkmark-outline" size={18} color="#059669" />
+                <Text style={styles.cardTitle}>Regional Samiti Coverage</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Bhopal Region:</Text>
+                <Text style={styles.detailValue}>84 Vidyalayas (100% verified)</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Chandigarh Region:</Text>
+                <Text style={styles.detailValue}>61 Vidyalayas (98% verified)</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Hyderabad Region:</Text>
+                <Text style={styles.detailValue}>77 Vidyalayas (99% verified)</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Patna Region:</Text>
+                <Text style={styles.detailValue}>82 Vidyalayas (97% verified)</Text>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.primaryBtn, { marginTop: 8 }]}
+                onPress={() => Alert.alert('Report Export', 'Compliance audit log dispatched to platform administrator email.')}>
+                <View style={styles.btnContent}>
+                  <Ionicons name="download-outline" size={16} color="#FFFFFF" />
+                  <Text style={styles.primaryBtnText}>Download Full Compliance Audit (PDF)</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+
+            {renderDevBadge('Platform Analytics & Verification Reports')}
+          </>
+        )}
+
+        {/* =========================================================================
+            STUDENT TABS (Home, Mentors, Sessions, Chat)
+           ========================================================================= */}
+        {isStudent && activeTabKey === 'HOME' && (
+          <>
+            {/* Student Home Header & Greeting */}
+            <View style={styles.welcomeBanner}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.welcomeGreeting}>Hello, {user?.fullName?.split(' ')[0]}! 👋</Text>
+                <Text style={styles.welcomeSub}>
+                  Find verified Navodaya alumni to guide your exams, college & career goals.
+                </Text>
+              </View>
+              <View style={styles.welcomeIconCircle}>
+                <Ionicons name="sparkles" size={24} color="#D97706" />
+              </View>
+            </View>
+
+            {/* Ask for Help Big Action Card */}
+            <TouchableOpacity
+              style={styles.askHelpCard}
+              onPress={() => {
+                Alert.alert(
+                  'Ask for Help Form',
+                  'Select a subject or career field where you need guidance. A matching Navodaya alumnus will be connected.',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Go to Sessions', onPress: () => setCurrentTab('SESSIONS') },
+                  ]
+                );
+              }}
+              activeOpacity={0.9}>
+              <View style={styles.askHelpContent}>
+                <View style={styles.askHelpIcon}>
+                  <Ionicons name="help-buoy" size={26} color="#FFFFFF" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.askHelpTitle}>Need Help or Guidance?</Text>
+                  <Text style={styles.askHelpSub}>
+                    Ask questions on JEE, NEET, CUET, or career roadmaps.
+                  </Text>
+                </View>
+                <View style={styles.askHelpArrow}>
+                  <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
+                </View>
+              </View>
+            </TouchableOpacity>
+
+            {/* Field Exploration Chips */}
+            <View style={styles.card}>
+              <View style={styles.cardTitleRow}>
+                <Ionicons name="compass-outline" size={18} color={AppColors.primary} />
+                <Text style={styles.cardTitle}>Explore Mentorship Fields</Text>
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalChipsRow}>
+                {['Engineering & IITs', 'Medical & AIIMS', 'Civil Services (UPSC)', 'Law & CLAT', 'Defense (NDA/CDS)', 'Software & IT', 'Design & NID'].map((field) => (
+                  <TouchableOpacity
+                    key={field}
+                    style={[styles.fieldChip, selectedFieldChip === field && styles.fieldChipActive]}
+                    onPress={() => setSelectedFieldChip(field)}
+                    activeOpacity={0.7}>
+                    <Text style={[styles.fieldChipText, selectedFieldChip === field && styles.fieldChipTextActive]}>
+                      {field}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+
+            {/* Alumni Available Now Horizontal Carousel */}
+            <View style={styles.card}>
+              <View style={styles.sectionHeaderRow}>
+                <View style={styles.sectionTitleGroup}>
+                  <Ionicons name="flash" size={18} color="#10B981" />
+                  <Text style={styles.sectionTitle}>Alumni Available Now</Text>
+                </View>
+                <TouchableOpacity onPress={() => setCurrentTab('MENTORS')}>
+                  <Text style={styles.viewAllText}>View All</Text>
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.alumniCarousel}>
+                <View style={styles.alumniMiniCard}>
+                  <View style={styles.onlineBadge} />
+                  <View style={styles.miniAvatar}>
+                    <Text style={styles.miniAvatarText}>AS</Text>
+                  </View>
+                  <Text style={styles.miniName}>Amit Sharma</Text>
+                  <Text style={styles.miniRole}>IIT Kharagpur '18</Text>
+                  <Text style={styles.miniCompany}>Google • SDE II</Text>
+                  <TouchableOpacity
+                    style={styles.miniConnectBtn}
+                    onPress={() => Alert.alert('Connect', 'Mentorship session requested with Amit Sharma!')}>
+                    <Text style={styles.miniConnectBtnText}>Connect</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.alumniMiniCard}>
+                  <View style={styles.onlineBadge} />
+                  <View style={[styles.miniAvatar, { backgroundColor: '#FDF2F8' }]}>
+                    <Text style={[styles.miniAvatarText, { color: '#DB2777' }]}>PR</Text>
+                  </View>
+                  <Text style={styles.miniName}>Pooja Rao</Text>
+                  <Text style={styles.miniRole}>AIIMS Delhi '20</Text>
+                  <Text style={styles.miniCompany}>Resident Doctor</Text>
+                  <TouchableOpacity
+                    style={styles.miniConnectBtn}
+                    onPress={() => Alert.alert('Connect', 'Mentorship session requested with Pooja Rao!')}>
+                    <Text style={styles.miniConnectBtnText}>Connect</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.alumniMiniCard}>
+                  <View style={styles.onlineBadge} />
+                  <View style={[styles.miniAvatar, { backgroundColor: '#F0FDF4' }]}>
+                    <Text style={[styles.miniAvatarText, { color: '#059669' }]}>RK</Text>
+                  </View>
+                  <Text style={styles.miniName}>Rohan Kumar</Text>
+                  <Text style={styles.miniRole}>NLSIU Bangalore</Text>
+                  <Text style={styles.miniCompany}>Corporate Counsel</Text>
+                  <TouchableOpacity
+                    style={styles.miniConnectBtn}
+                    onPress={() => Alert.alert('Connect', 'Mentorship session requested with Rohan Kumar!')}>
+                    <Text style={styles.miniConnectBtnText}>Connect</Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </View>
+
+            {/* Upcoming Session Card */}
+            <View style={styles.card}>
+              <View style={styles.cardTitleRow}>
+                <Ionicons name="calendar-outline" size={18} color={AppColors.primary} />
+                <Text style={styles.cardTitle}>Your Upcoming Session</Text>
+              </View>
+              <View style={styles.sessionCardContent}>
+                <View style={styles.sessionDateBadge}>
+                  <Text style={styles.sessionDateMonth}>OCT</Text>
+                  <Text style={styles.sessionDateDay}>28</Text>
+                </View>
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Text style={styles.sessionTopic}>JEE Physics Mechanics Masterclass</Text>
+                  <Text style={styles.sessionWith}>with Mentor Amit Sharma (IIT KGP)</Text>
+                  <Text style={styles.sessionTime}>Tuesday • 6:00 PM - 7:00 PM (Google Meet)</Text>
+                </View>
+              </View>
+            </View>
+
+            {renderDevBadge('Student Home Dashboard')}
+          </>
+        )}
+
+        {isStudent && activeTabKey === 'MENTORS' && (
+          <>
+            {/* Mentors Directory Search & Filters */}
+            <View style={styles.card}>
+              <View style={styles.searchBar}>
+                <Ionicons name="search-outline" size={18} color="#64748B" />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search mentors by name, company, college, city..."
+                  value={searchMentorQuery}
+                  onChangeText={setSearchMentorQuery}
+                  placeholderTextColor="#94A3B8"
+                />
+                {searchMentorQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => setSearchMentorQuery('')}>
+                    <Ionicons name="close-circle" size={18} color="#94A3B8" />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Mode Filters */}
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.horizontalChipsRow, { marginTop: 10 }]}>
+                {['All Modes', 'Video Call', 'Voice Call', 'Chat'].map((m) => (
+                  <TouchableOpacity
+                    key={m}
+                    style={[styles.smallFilterPill, selectedModeFilter === m && styles.smallFilterPillActive]}
+                    onPress={() => setSelectedModeFilter(m)}>
+                    <Text style={[styles.smallFilterPillText, selectedModeFilter === m && styles.smallFilterPillTextActive]}>
+                      {m}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+
+            {/* Mentor Cards List */}
+            <View style={styles.card}>
+              <View style={styles.mentorHeaderRow}>
+                <View style={styles.avatarCircle}>
+                  <Text style={styles.avatarText}>AS</Text>
+                </View>
+                <View style={styles.mentorInfoCol}>
+                  <View style={styles.nameTagRow}>
+                    <Text style={styles.mentorName}>Amit Sharma</Text>
+                    <View style={styles.verifiedTag}>
+                      <Ionicons name="checkmark-circle" size={14} color="#059669" />
+                      <Text style={styles.verifiedTagText}>Verified Alumnus</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.mentorOrgText}>Senior Software Engineer • Google</Text>
+                  <Text style={styles.mentorSubText}>JNV Varanasi • Class of 2018 (IIT KGP)</Text>
+                </View>
+              </View>
+
+              <View style={styles.divider} />
+
+              <View style={styles.tagsContainer}>
+                <View style={styles.tagItem}><Text style={styles.tagItemText}>JEE Advanced</Text></View>
+                <View style={styles.tagItem}><Text style={styles.tagItemText}>Computer Science</Text></View>
+                <View style={styles.tagItem}><Text style={styles.tagItemText}>Coding & DSA</Text></View>
+              </View>
+
+              <View style={styles.mentorCardActions}>
+                <TouchableOpacity
+                  style={styles.requestGuidanceBtn}
+                  onPress={() => Alert.alert('Request Sent', 'Guidance request submitted to Amit Sharma!')}>
+                  <Ionicons name="paper-plane" size={14} color="#FFFFFF" />
+                  <Text style={styles.requestGuidanceBtnText}>Request 1-on-1 Guidance</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.card}>
+              <View style={styles.mentorHeaderRow}>
+                <View style={[styles.avatarCircle, { backgroundColor: '#FDF2F8' }]}>
+                  <Text style={[styles.avatarText, { color: '#DB2777' }]}>PR</Text>
+                </View>
+                <View style={styles.mentorInfoCol}>
+                  <View style={styles.nameTagRow}>
+                    <Text style={styles.mentorName}>Dr. Pooja Rao</Text>
+                    <View style={styles.verifiedTag}>
+                      <Ionicons name="checkmark-circle" size={14} color="#059669" />
+                      <Text style={styles.verifiedTagText}>Verified Alumnus</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.mentorOrgText}>Resident Physician • AIIMS New Delhi</Text>
+                  <Text style={styles.mentorSubText}>JNV Ernakulam • Class of 2017</Text>
+                </View>
+              </View>
+
+              <View style={styles.divider} />
+
+              <View style={styles.tagsContainer}>
+                <View style={styles.tagItem}><Text style={styles.tagItemText}>NEET UG</Text></View>
+                <View style={styles.tagItem}><Text style={styles.tagItemText}>Medical Sciences</Text></View>
+                <View style={styles.tagItem}><Text style={styles.tagItemText}>Biology Strategy</Text></View>
+              </View>
+
+              <View style={styles.mentorCardActions}>
+                <TouchableOpacity
+                  style={styles.requestGuidanceBtn}
+                  onPress={() => Alert.alert('Request Sent', 'Guidance request submitted to Dr. Pooja Rao!')}>
+                  <Ionicons name="paper-plane" size={14} color="#FFFFFF" />
+                  <Text style={styles.requestGuidanceBtnText}>Request 1-on-1 Guidance</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {renderDevBadge('Alumni Directory & Search Engine')}
+          </>
+        )}
+
+        {isStudent && activeTabKey === 'SESSIONS' && (
+          <>
+            {/* Segmented Control: Requests vs Sessions */}
+            <View style={styles.segmentedRow}>
+              <TouchableOpacity
+                style={[styles.segmentBtn, studentSessionSubTab === 'REQUESTS' && styles.segmentBtnActive]}
+                onPress={() => setStudentSessionSubTab('REQUESTS')}>
+                <Text style={[styles.segmentBtnText, studentSessionSubTab === 'REQUESTS' && styles.segmentBtnTextActive]}>
+                  My Requests (1)
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.segmentBtn, studentSessionSubTab === 'SESSIONS' && styles.segmentBtnActive]}
+                onPress={() => setStudentSessionSubTab('SESSIONS')}>
+                <Text style={[styles.segmentBtnText, studentSessionSubTab === 'SESSIONS' && styles.segmentBtnTextActive]}>
+                  Sessions (Upcoming & Past)
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {studentSessionSubTab === 'REQUESTS' ? (
+              <View style={styles.card}>
+                <View style={styles.badgeRow}>
+                  <View style={styles.statusBadgeWarning}>
+                    <Text style={styles.statusBadgeWarningText}>Matched with Mentor</Text>
+                  </View>
+                  <Text style={styles.queueCounter}>Submitted 2 days ago</Text>
+                </View>
+                <Text style={styles.applicantName}>JEE Physics: Rotational Dynamics Doubt Solving</Text>
+                <Text style={styles.applicantSub}>Matched Mentor: Amit Sharma (Google / IIT KGP)</Text>
+                <Text style={styles.cardHelperText}>
+                  Scheduled for Oct 28 at 6:00 PM. Video call link has been dispatched to your chat.
+                </Text>
+              </View>
+            ) : (
+              <>
+                <View style={styles.card}>
+                  <View style={styles.badgeRow}>
+                    <View style={styles.statusBadgeSuccess}>
+                      <Text style={styles.statusBadgeSuccessText}>Upcoming</Text>
+                    </View>
+                    <Text style={styles.queueCounter}>Oct 28, 6:00 PM</Text>
+                  </View>
+                  <Text style={styles.applicantName}>Rotational Motion & Mechanics</Text>
+                  <Text style={styles.applicantSub}>1-on-1 Video Session with Amit Sharma</Text>
+                  <TouchableOpacity
+                    style={[styles.primaryBtn, { marginTop: 12 }]}
+                    onPress={() => Alert.alert('Join Call', 'Meeting room opens 5 minutes before scheduled start time.')}>
+                    <Text style={styles.primaryBtnText}>Join Meeting (Google Meet)</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.card}>
+                  <View style={styles.badgeRow}>
+                    <View style={styles.statusBadge}>
+                      <Text style={styles.statusBadgeText}>Completed</Text>
+                    </View>
+                    <Text style={styles.queueCounter}>Oct 14, 2026</Text>
+                  </View>
+                  <Text style={styles.applicantName}>NEET Strategy & Book Recommendations</Text>
+                  <Text style={styles.applicantSub}>Mentor: Dr. Pooja Rao (AIIMS Delhi)</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 8 }}>
+                    <Text style={{ fontSize: 13, color: '#64748B' }}>Your Rating:</Text>
+                    <Ionicons name="star" size={16} color="#F59E0B" />
+                    <Ionicons name="star" size={16} color="#F59E0B" />
+                    <Ionicons name="star" size={16} color="#F59E0B" />
+                    <Ionicons name="star" size={16} color="#F59E0B" />
+                    <Ionicons name="star" size={16} color="#F59E0B" />
+                  </View>
+                </View>
+              </>
+            )}
+
+            {renderDevBadge('Student Sessions & Help Requests')}
+          </>
+        )}
+
+        {isStudent && activeTabKey === 'CHAT' && (
+          <>
+            <View style={styles.card}>
+              <View style={styles.searchBar}>
+                <Ionicons name="search-outline" size={18} color="#64748B" />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search conversations..."
+                  placeholderTextColor="#94A3B8"
+                />
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={styles.chatConversationCard}
+              onPress={() => Alert.alert('Chat Thread', 'Opening chat thread with Amit Sharma...')}
+              activeOpacity={0.8}>
+              <View style={styles.chatAvatar}>
+                <Text style={styles.chatAvatarText}>AS</Text>
+              </View>
+              <View style={styles.chatInfo}>
+                <View style={styles.chatHeaderRow}>
+                  <Text style={styles.chatName}>Amit Sharma</Text>
+                  <Text style={styles.chatTime}>12:30 PM</Text>
+                </View>
+                <Text style={styles.chatLastMessage} numberOfLines={1}>
+                  I've shared the physics mechanics formula sheet. See you tomorrow at 6!
+                </Text>
+              </View>
+              <View style={styles.chatBadge}>
+                <Text style={styles.chatBadgeText}>2</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.chatConversationCard}
+              onPress={() => Alert.alert('Chat Thread', 'Opening chat thread with Navodisha Alumni Cell...')}
+              activeOpacity={0.8}>
+              <View style={[styles.chatAvatar, { backgroundColor: '#EEF2FF' }]}>
+                <Ionicons name="school" size={20} color={AppColors.primary} />
+              </View>
+              <View style={styles.chatInfo}>
+                <View style={styles.chatHeaderRow}>
+                  <Text style={styles.chatName}>JNV Alumni Cell</Text>
+                  <Text style={styles.chatTime}>Yesterday</Text>
+                </View>
+                <Text style={styles.chatLastMessage} numberOfLines={1}>
+                  Reminder: Virtual Alumni Career Talk on Defence is scheduled this weekend.
+                </Text>
+              </View>
+              <View style={styles.chatBadge}>
+                <Text style={styles.chatBadgeText}>1</Text>
+              </View>
+            </TouchableOpacity>
+
+            {renderDevBadge('Real-time Mentorship Messaging')}
+          </>
+        )}
+
+        {/* =========================================================================
+            ALUMNUS TABS (Home, Requests, Sessions, Chat)
+           ========================================================================= */}
+        {isAlumnus && !isAccountPending && activeTabKey === 'HOME' && (
+          <>
+            {/* Open to help toggle banner at the top */}
+            <View style={styles.card}>
+              <View style={styles.toggleRow}>
+                <View style={styles.toggleTextCol}>
+                  <Text style={styles.toggleLabel}>Open to Help Students</Text>
+                  <Text style={styles.toggleSub}>
+                    Toggle your availability to receive mentorship requests from junior Navodayans.
+                  </Text>
+                </View>
+                <Switch
+                  value={fullProfile?.alumniDetails?.openToHelp ?? true}
+                  onValueChange={handleToggleMentorAvailability}
+                  trackColor={{ false: '#CBD5E1', true: AppColors.primary }}
+                  thumbColor="#FFFFFF"
+                />
+              </View>
+            </View>
+
+            {/* Mentor Impact Stats */}
+            <View style={styles.statsGrid}>
+              <View style={styles.statBox}>
+                <Text style={styles.statNumber}>14</Text>
+                <Text style={styles.statLabel}>Students Helped</Text>
+              </View>
+              <View style={styles.statBox}>
+                <Text style={styles.statNumber}>28h</Text>
+                <Text style={styles.statLabel}>Mentored</Text>
+              </View>
+              <View style={styles.statBox}>
+                <Text style={styles.statNumber}>4.9 ★</Text>
+                <Text style={styles.statLabel}>Rating</Text>
+              </View>
+            </View>
+
+            {/* New Requests for Me Card */}
+            <View style={styles.card}>
+              <View style={styles.sectionHeaderRow}>
+                <View style={styles.sectionTitleGroup}>
+                  <Ionicons name="notifications" size={18} color="#D97706" />
+                  <Text style={styles.sectionTitle}>New Requests for You</Text>
+                </View>
+                <View style={styles.badgeCount}>
+                  <Text style={styles.badgeCountText}>1 New</Text>
+                </View>
+              </View>
+
+              <View style={[styles.card, { backgroundColor: '#F8FAFC', marginTop: 10 }]}>
+                <Text style={styles.applicantName}>Aarav Sen (Class 12, Science)</Text>
+                <Text style={styles.applicantSub}>{user?.jnvName} • Aravali House</Text>
+                <Text style={styles.cardHelperText}>
+                  "Need guidance on choosing between CSE and ECE in JEE counseling and preparing for JEE Advanced."
+                </Text>
+                <View style={styles.actionRow}>
+                  <TouchableOpacity
+                    style={styles.approveBtn}
+                    onPress={() => Alert.alert('Request Accepted', 'Aarav has been notified. You can now schedule a session.')}>
+                    <Text style={styles.approveBtnText}>Accept Request</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.rejectBtn}
+                    onPress={() => Alert.alert('Request Declined', 'Request declined.')}>
+                    <Text style={styles.rejectBtnText}>Decline</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+
+            {/* Upcoming Sessions Card */}
+            <View style={styles.card}>
+              <View style={styles.cardTitleRow}>
+                <Ionicons name="calendar-outline" size={18} color={AppColors.primary} />
+                <Text style={styles.cardTitle}>Upcoming Mentorship Sessions</Text>
+              </View>
+              <View style={styles.sessionCardContent}>
+                <View style={styles.sessionDateBadge}>
+                  <Text style={styles.sessionDateMonth}>OCT</Text>
+                  <Text style={styles.sessionDateDay}>29</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.sessionTopic}>1-on-1 Career Strategy Session</Text>
+                  <Text style={styles.sessionWith}>Student: Priya Sharma (Class 11)</Text>
+                  <Text style={styles.sessionTime}>Wednesday • 7:00 PM</Text>
+                </View>
+              </View>
+            </View>
+
+            {renderDevBadge('Alumni Mentor Hub')}
+          </>
+        )}
+
+        {isAlumnus && !isAccountPending && activeTabKey === 'REQUESTS' && (
+          <>
+            <View style={styles.segmentedRow}>
+              <TouchableOpacity
+                style={[styles.segmentBtn, alumnusRequestSubTab === 'STUDENTS' && styles.segmentBtnActive]}
+                onPress={() => setAlumnusRequestSubTab('STUDENTS')}>
+                <Text style={[styles.segmentBtnText, alumnusRequestSubTab === 'STUDENTS' && styles.segmentBtnTextActive]}>
+                  Student Requests (2)
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.segmentBtn, alumnusRequestSubTab === 'JNV_ASKS' && styles.segmentBtnActive]}
+                onPress={() => setAlumnusRequestSubTab('JNV_ASKS')}>
+                <Text style={[styles.segmentBtnText, alumnusRequestSubTab === 'JNV_ASKS' && styles.segmentBtnTextActive]}>
+                  JNV Asks (1)
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {alumnusRequestSubTab === 'STUDENTS' ? (
+              <View style={styles.card}>
+                <Text style={styles.applicantName}>Rahul Verma (Class 12)</Text>
+                <Text style={styles.applicantSub}>Topic: JEE Physics Mechanics & Mock Analysis</Text>
+                <Text style={styles.cardHelperText}>
+                  "Looking for tips on time management during mock tests and key topics to revise in 12th standard."
+                </Text>
+                <View style={styles.actionRow}>
+                  <TouchableOpacity
+                    style={styles.approveBtn}
+                    onPress={() => Alert.alert('Accepted', 'Student request accepted!')}>
+                    <Text style={styles.approveBtnText}>Accept</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.rejectBtn}
+                    onPress={() => Alert.alert('Declined', 'Request declined.')}>
+                    <Text style={styles.rejectBtnText}>Decline</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.card}>
+                <View style={styles.badgeRow}>
+                  <View style={styles.statusBadgeSuccess}>
+                    <Text style={styles.statusBadgeSuccessText}>Principal's Invitation</Text>
+                  </View>
+                  <Text style={styles.queueCounter}>{user?.jnvName}</Text>
+                </View>
+                <Text style={styles.applicantName}>Career Orientation for Class 10 & 12 Batch</Text>
+                <Text style={styles.cardHelperText}>
+                  "The Vidyalaya is organizing an online career awareness seminar on careers in Technology, Research and Civil Services. We invite our distinguished alumni to address the students."
+                </Text>
+                <TouchableOpacity
+                  style={[styles.primaryBtn, { marginTop: 12 }]}
+                  onPress={() => Alert.alert('Interest Recorded', 'The school principal has been notified of your willingness to speak!')}>
+                  <Text style={styles.primaryBtnText}>Express Interest / Volunteer</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {renderDevBadge('Help Requests & JNV Invitations')}
+          </>
+        )}
+
+        {isAlumnus && !isAccountPending && activeTabKey === 'SESSIONS' && (
+          <>
+            <View style={styles.card}>
+              <View style={styles.cardTitleRow}>
+                <Ionicons name="time-outline" size={18} color={AppColors.primary} />
+                <Text style={styles.cardTitle}>Mentorship Availability Slots</Text>
+              </View>
+              <Text style={styles.cardHelperText}>
+                Define weekly time windows when students can book guidance calls with you.
+              </Text>
+              <TouchableOpacity
+                style={styles.editProfileBtn}
+                onPress={() => Alert.alert('Availability', 'Slot management interface opening...')}>
+                <Ionicons name="add-circle-outline" size={16} color={AppColors.primary} />
+                <Text style={styles.editProfileBtnText}>Set Weekend Availability Slots</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.card}>
+              <View style={styles.cardTitleRow}>
+                <Ionicons name="calendar-outline" size={18} color={AppColors.primary} />
+                <Text style={styles.cardTitle}>Upcoming & Past Sessions</Text>
+              </View>
+              <View style={styles.sessionCardContent}>
+                <View style={styles.sessionDateBadge}>
+                  <Text style={styles.sessionDateMonth}>OCT</Text>
+                  <Text style={styles.sessionDateDay}>29</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.sessionTopic}>JEE Exam Strategy & Doubts</Text>
+                  <Text style={styles.sessionWith}>Student: Aarav Sen</Text>
+                  <Text style={styles.sessionTime}>7:00 PM • Google Meet</Text>
+                </View>
+              </View>
+            </View>
+
+            {renderDevBadge('Mentorship Slots & Calendar Management')}
+          </>
+        )}
+
+        {isAlumnus && !isAccountPending && activeTabKey === 'CHAT' && (
+          <>
+            <TouchableOpacity
+              style={styles.chatConversationCard}
+              onPress={() => Alert.alert('Chat Thread', 'Opening conversation with Aarav Sen...')}
+              activeOpacity={0.8}>
+              <View style={styles.chatAvatar}>
+                <Text style={styles.chatAvatarText}>AS</Text>
+              </View>
+              <View style={styles.chatInfo}>
+                <View style={styles.chatHeaderRow}>
+                  <Text style={styles.chatName}>Aarav Sen (Student)</Text>
+                  <Text style={styles.chatTime}>11:15 AM</Text>
+                </View>
+                <Text style={styles.chatLastMessage} numberOfLines={1}>
+                  Thank you sir! Looking forward to Wednesday's discussion.
+                </Text>
+              </View>
+              <View style={styles.chatBadge}>
+                <Text style={styles.chatBadgeText}>1</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.chatConversationCard}
+              onPress={() => Alert.alert('Chat Thread', 'Opening conversation with JNV Alumni Coordinator...')}
+              activeOpacity={0.8}>
+              <View style={[styles.chatAvatar, { backgroundColor: '#F0FDF4' }]}>
+                <Ionicons name="school" size={20} color="#059669" />
+              </View>
+              <View style={styles.chatInfo}>
+                <View style={styles.chatHeaderRow}>
+                  <Text style={styles.chatName}>JNV School Coordinator</Text>
+                  <Text style={styles.chatTime}>Yesterday</Text>
+                </View>
+                <Text style={styles.chatLastMessage} numberOfLines={1}>
+                  Sir, could you please confirm your availability for Saturday's talk?
+                </Text>
+              </View>
+              <View style={styles.chatBadge}>
+                <Text style={styles.chatBadgeText}>1</Text>
+              </View>
+            </TouchableOpacity>
+
+            {renderDevBadge('Alumni Messaging Network')}
+          </>
+        )}
+
+        {/* =========================================================================
+            JNV ADMIN TABS (Home, My Asks, Alumni, Chat)
+           ========================================================================= */}
+        {isJnvAdmin && !isAccountPending && activeTabKey === 'HOME' && (
+          <>
+            {/* Summary of Open Asks and New Responses */}
+            <View style={styles.statsGrid}>
+              <View style={styles.statBox}>
+                <Text style={styles.statNumber}>3</Text>
+                <Text style={styles.statLabel}>Open Asks</Text>
+              </View>
+              <View style={styles.statBox}>
+                <Text style={styles.statNumber}>7</Text>
+                <Text style={styles.statLabel}>Responses</Text>
+              </View>
+              <View style={styles.statBox}>
+                <Text style={styles.statNumber}>2</Text>
+                <Text style={styles.statLabel}>Sessions</Text>
+              </View>
+            </View>
+
+            {/* Quick Action: Create Ask */}
+            <TouchableOpacity
+              style={styles.askHelpCard}
+              onPress={() => setCurrentTab('MY_ASKS')}
+              activeOpacity={0.85}>
+              <View style={styles.askHelpContent}>
+                <View style={styles.askHelpIcon}>
+                  <Ionicons name="megaphone" size={26} color="#FFFFFF" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.askHelpTitle}>Post Guidance Ask for JNV</Text>
+                  <Text style={styles.askHelpSub}>
+                    Request alumni speakers for career talks, workshops, or exam guidance.
+                  </Text>
+                </View>
+                <View style={styles.askHelpArrow}>
+                  <Ionicons name="add" size={20} color="#FFFFFF" />
+                </View>
+              </View>
+            </TouchableOpacity>
+
+            {/* Responding Alumni awaiting confirmation */}
+            <View style={styles.card}>
+              <View style={styles.cardTitleRow}>
+                <Ionicons name="people-outline" size={18} color={AppColors.primary} />
+                <Text style={styles.cardTitle}>Recent Alumni Responses</Text>
+              </View>
+              <View style={styles.mentorHeaderRow}>
+                <View style={styles.avatarCircle}>
+                  <Text style={styles.avatarText}>AS</Text>
+                </View>
+                <View style={styles.mentorInfoCol}>
+                  <Text style={styles.mentorName}>Amit Sharma (Google • IIT KGP)</Text>
+                  <Text style={styles.mentorSubText}>Responded to: "Career Talk on Technology"</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.selectAlumniBtn}
+                  onPress={() => Alert.alert('Selected', 'Alumnus selected for session.')}>
+                  <Text style={styles.selectAlumniBtnText}>Select</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {renderDevBadge('JNV School Administration Portal')}
+          </>
+        )}
+
+        {isJnvAdmin && !isAccountPending && activeTabKey === 'MY_ASKS' && (
+          <>
+            <TouchableOpacity
+              style={styles.primaryBtn}
+              onPress={() => Alert.alert('Create Ask', 'Opening school guidance request creator...')}
+              activeOpacity={0.85}>
+              <View style={styles.btnContent}>
+                <Ionicons name="add-circle" size={18} color="#FFFFFF" />
+                <Text style={styles.primaryBtnText}>Create New School Request</Text>
+              </View>
+            </TouchableOpacity>
+
+            <View style={styles.card}>
+              <View style={styles.badgeRow}>
+                <View style={styles.statusBadgeSuccess}>
+                  <Text style={styles.statusBadgeSuccessText}>3 Responded</Text>
+                </View>
+                <Text style={styles.queueCounter}>Open Ask</Text>
+              </View>
+              <Text style={styles.applicantName}>NEET 2027 Strategy Workshop</Text>
+              <Text style={styles.applicantSub}>Target: Class 11 & 12 PCB Stream</Text>
+              <Text style={styles.cardHelperText}>
+                Invited alumni doctors and medical students to share routine, study techniques, and mock test tips.
+              </Text>
+              <TouchableOpacity
+                style={styles.editProfileBtn}
+                onPress={() => Alert.alert('Alumni Responses', 'Listing 3 responding alumni for review...')}>
+                <Text style={styles.editProfileBtnText}>View Responding Alumni (3) & Select</Text>
+              </TouchableOpacity>
+            </View>
+
+            {renderDevBadge('Vidyalaya Guidance Requests')}
+          </>
+        )}
+
+        {isJnvAdmin && !isAccountPending && activeTabKey === 'ALUMNI' && (
+          <>
+            <View style={styles.card}>
+              <View style={styles.searchBar}>
+                <Ionicons name="search-outline" size={18} color="#64748B" />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder={`Search verified alumni from ${user?.jnvName || 'your JNV'}...`}
+                  placeholderTextColor="#94A3B8"
+                />
+              </View>
+            </View>
+
+            <View style={styles.card}>
+              <View style={styles.mentorHeaderRow}>
+                <View style={styles.avatarCircle}>
+                  <Text style={styles.avatarText}>AS</Text>
+                </View>
+                <View style={styles.mentorInfoCol}>
+                  <Text style={styles.mentorName}>Amit Sharma</Text>
+                  <Text style={styles.mentorOrgText}>Senior Software Engineer • Google</Text>
+                  <Text style={styles.mentorSubText}>Batch of 2018 (IIT Kharagpur)</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.inviteAlumniBtn}
+                  onPress={() => Alert.alert('Invitation Sent', 'Invitation dispatched to alumnus.')}>
+                  <Text style={styles.inviteAlumniBtnText}>Invite</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {renderDevBadge('JNV Alumni Roster & Engagement')}
+          </>
+        )}
+
+        {isJnvAdmin && !isAccountPending && activeTabKey === 'CHAT' && (
+          <>
+            <View style={styles.complianceNoticeBox}>
+              <Ionicons name="information-circle-outline" size={18} color="#1E3A8A" />
+              <Text style={styles.complianceNoticeText}>
+                Faculty Chat Channel: Faculty communications are enabled exclusively with verified alumni and school administration. Student direct messages are restricted for child safety.
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.chatConversationCard}
+              onPress={() => Alert.alert('Chat Thread', 'Opening conversation with Amit Sharma (Alumnus)...')}
+              activeOpacity={0.8}>
+              <View style={styles.chatAvatar}>
+                <Text style={styles.chatAvatarText}>AS</Text>
+              </View>
+              <View style={styles.chatInfo}>
+                <View style={styles.chatHeaderRow}>
+                  <Text style={styles.chatName}>Amit Sharma (Alumnus)</Text>
+                  <Text style={styles.chatTime}>10:45 AM</Text>
+                </View>
+                <Text style={styles.chatLastMessage} numberOfLines={1}>
+                  Sir, I would be honored to conduct the seminar next Saturday.
+                </Text>
+              </View>
+              <View style={styles.chatBadge}>
+                <Text style={styles.chatBadgeText}>1</Text>
+              </View>
+            </TouchableOpacity>
+
+            {renderDevBadge('Faculty-Alumni Coordination Channel')}
+          </>
+        )}
+
       </ScrollView>
 
-      {/* 5-Tab Navigation Bar */}
+      {/* =========================================================================
+          PERSISTENT ROLE-BASED BOTTOM NAVIGATION BAR
+         ========================================================================= */}
       <View style={styles.bottomTabBar}>
-        <TouchableOpacity style={styles.tabItemActive} activeOpacity={0.8}>
-          <Ionicons name="people" size={22} color={AppColors.primary} />
-          <Text style={styles.tabTextActive}>Mentors</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.tabItem} activeOpacity={0.8}>
-          <Ionicons name="calendar-outline" size={22} color="#64748B" />
-          <Text style={styles.tabText}>Sessions</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.tabItem} activeOpacity={0.8}>
-          <Ionicons name="compass-outline" size={22} color="#64748B" />
-          <Text style={styles.tabText}>Navodaya Hub</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.tabItem} activeOpacity={0.8}>
-          <Ionicons name="chatbubbles-outline" size={22} color="#64748B" />
-          <Text style={styles.tabText}>Chat</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.tabItem} onPress={handleLogout} activeOpacity={0.8}>
-          <Ionicons name="person-outline" size={22} color="#64748B" />
-          <Text style={styles.tabText}>Profile</Text>
-        </TouchableOpacity>
+        {tabs.map((tab) => {
+          const isActive = tab.key === activeTabKey;
+          return (
+            <TouchableOpacity
+              key={tab.key}
+              style={styles.bottomTabItem}
+              onPress={() => setCurrentTab(tab.key)}
+              activeOpacity={0.7}>
+              <View style={styles.tabIconWrapper}>
+                <Ionicons
+                  name={isActive ? tab.activeIcon : tab.icon}
+                  size={22}
+                  color={isActive ? AppColors.primary : '#64748B'}
+                />
+                {tab.badge && (
+                  <View style={styles.tabBadge}>
+                    <Text style={styles.tabBadgeText}>{tab.badge}</Text>
+                  </View>
+                )}
+                {tab.hasDot && <View style={styles.tabDot} />}
+              </View>
+              <Text
+                style={[
+                  styles.bottomTabLabel,
+                  isActive && styles.bottomTabLabelActive,
+                ]}>
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
     </SafeAreaView>
   );
@@ -866,1382 +2013,1204 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: AppColors.background,
+    backgroundColor: '#F8FAFC',
   },
   topBar: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
+    alignItems: 'center',
+    paddingHorizontal: 16,
     paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
     backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
   },
   navTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
+    flex: 1,
+  },
+  topBarRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  notificationBellBtn: {
+    padding: 6,
+    position: 'relative',
+  },
+  bellBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    backgroundColor: '#EF4444',
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  bellBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   navLogo: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#EFF6FF',
-    alignItems: 'center',
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#EEF2FF',
     justifyContent: 'center',
+    alignItems: 'center',
   },
   navTitle: {
     fontSize: 16,
     fontWeight: '700',
     color: '#0F172A',
   },
-  navAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: AppColors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  scrollContent: {
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 36,
-  },
-  // Admin Portal Styles
-  adminBanner: {
-    backgroundColor: '#0F2341',
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 16,
-  },
-  adminBannerBadges: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
-  },
-  adminBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-    gap: 4,
-  },
-  adminBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#F59E0B',
-  },
-  samitiCertBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-    gap: 4,
-  },
-  samitiCertText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#10B981',
-  },
-  adminBannerTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    marginBottom: 4,
-  },
-  adminBannerSub: {
-    fontSize: 12,
-    color: '#94A3B8',
-    marginBottom: 14,
-    lineHeight: 16,
-  },
-  adminStatsRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  adminStatPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FEF3C7',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    gap: 6,
-  },
-  adminStatText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#92400E',
-  },
-  activeReviewHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  activeReviewLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  activeReviewTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  queueCounterBadge: {
-    backgroundColor: '#EEF2FF',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 8,
-  },
-  queueCounterText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: AppColors.primary,
-  },
-  activeReviewIcons: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  applicantFullCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginBottom: 16,
-  },
-  applicantHeaderRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 12,
-  },
-  applicantAvatarBox: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: '#EFF6FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  applicantAvatarText: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: AppColors.primary,
-  },
-  applicantVerifiedBadge: {
-    position: 'absolute',
-    bottom: -2,
-    right: -2,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#10B981',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-  },
-  applicantNameCol: {
-    flex: 1,
-  },
-  applicantNameText: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#0F172A',
-    marginBottom: 2,
-  },
-  applicantRolePill: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#EEF2FF',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
-    marginBottom: 4,
-  },
-  applicantRolePillText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: AppColors.primary,
-  },
-  applicantPhoneRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  applicantPhoneText: {
+  navSubtitle: {
     fontSize: 12,
     color: '#64748B',
   },
-  smsVerifiedTag: {
-    backgroundColor: '#ECFDF5',
-    paddingHorizontal: 6,
-    paddingVertical: 1,
+  signOutBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: '#FEF2F2',
+  },
+  signOutText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#DC2626',
+  },
+  tabSelectorRow: {
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    gap: 10,
+  },
+  tabButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
+  },
+  tabButtonActive: {
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1,
+    borderColor: AppColors.primary,
+  },
+  tabButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  tabButtonTextActive: {
+    color: AppColors.primary,
+  },
+  scrollContent: {
+    padding: 16,
+    gap: 14,
+    paddingBottom: 24,
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 10,
+  },
+  cardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  cardTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  cardHelperText: {
+    fontSize: 13,
+    color: '#64748B',
+    lineHeight: 18,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#F1F5F9',
+    marginVertical: 4,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  detailLabel: {
+    fontSize: 13,
+    color: '#64748B',
+    minWidth: 110,
+  },
+  detailValue: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#0F172A',
+    flex: 1,
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  statusBadge: {
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
     borderRadius: 6,
   },
-  smsVerifiedText: {
-    fontSize: 9,
+  statusBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  statusBadgeWarning: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  statusBadgeWarningText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#B45309',
+  },
+  statusBadgeSuccess: {
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  statusBadgeSuccessText: {
+    fontSize: 12,
     fontWeight: '700',
     color: '#059669',
   },
-  metaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 6,
+  queueCounter: {
+    fontSize: 12,
+    color: '#94A3B8',
+    fontWeight: '500',
   },
-  metaBoldText: {
-    fontSize: 13,
+  applicantName: {
+    fontSize: 16,
     fontWeight: '700',
     color: '#0F172A',
   },
-  metaMutedText: {
-    fontSize: 12,
-    color: '#64748B',
-  },
-  metaText: {
-    fontSize: 12,
-    color: '#334155',
-  },
-  sectionSmallLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#64748B',
-    marginTop: 8,
-    marginBottom: 6,
-  },
-  streamsWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginBottom: 12,
-  },
-  streamBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#EEF2FF',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    gap: 4,
-  },
-  streamBadgeText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: AppColors.primary,
-  },
-  applicantNoteBox: {
-    flexDirection: 'row',
-    backgroundColor: '#FFFBEB',
-    padding: 10,
-    borderRadius: 10,
-    gap: 8,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: '#FEF3C7',
-  },
-  applicantNoteCol: {
-    flex: 1,
-  },
-  applicantNoteTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#B45309',
-    marginBottom: 2,
-  },
-  applicantNoteQuote: {
-    fontSize: 12,
-    fontStyle: 'italic',
-    color: '#92400E',
-  },
-  complianceSection: {
-    marginBottom: 16,
-  },
-  complianceHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 8,
-  },
-  complianceTitle: {
+  applicantSub: {
     fontSize: 13,
-    fontWeight: '700',
-    color: '#0F172A',
+    color: '#64748B',
   },
-  checkCard: {
+  actionRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 12,
-    padding: 10,
-    marginBottom: 6,
     gap: 10,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
+    marginTop: 8,
   },
-  checkIconActive: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    backgroundColor: '#1E3A8A',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkTextCol: {
+  approveBtn: {
     flex: 1,
-  },
-  checkLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#0F172A',
-  },
-  checkSub: {
-    fontSize: 10,
-    color: '#64748B',
-  },
-  approveLargeBtn: {
-    height: 48,
-    borderRadius: 12,
     backgroundColor: '#059669',
+    paddingVertical: 10,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 10,
   },
-  largeBtnContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  approveLargeBtnText: {
-    fontSize: 15,
-    fontWeight: '700',
+  approveBtnText: {
     color: '#FFFFFF',
-  },
-  rejectOutlineBtn: {
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#FECACA',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  rejectOutlineText: {
-    fontSize: 14,
     fontWeight: '700',
-    color: '#DC2626',
-  },
-  queueSection: {
-    marginTop: 8,
-    marginBottom: 16,
-  },
-  queueHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  queueSectionTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#0F172A',
-  },
-  queueRemainingText: {
-    fontSize: 12,
-    color: '#64748B',
-  },
-  queueCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    gap: 10,
-  },
-  queueAvatar: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#EFF6FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  queueAvatarText: {
     fontSize: 13,
-    fontWeight: '700',
-    color: AppColors.primary,
   },
-  queueTextCol: {
+  rejectBtn: {
     flex: 1,
+    backgroundColor: '#FEE2E2',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  queueName: {
+  rejectBtnText: {
+    color: '#DC2626',
+    fontWeight: '700',
     fontSize: 13,
-    fontWeight: '700',
-    color: '#0F172A',
   },
-  queueTag: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#FEF3C7',
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: 6,
-    marginVertical: 2,
+  userActionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
   },
-  queueTagText: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#B45309',
-  },
-  queueSub: {
-    fontSize: 11,
-    color: '#64748B',
-  },
-  auditRow: {
+  activateSmallBtn: {
+    flex: 1,
+    backgroundColor: '#059669',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    marginVertical: 12,
+    gap: 4,
+    paddingVertical: 8,
+    borderRadius: 6,
   },
-  auditText: {
-    fontSize: 11,
-    color: '#64748B',
+  activateSmallBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  suspendSmallBtn: {
+    flex: 1,
+    backgroundColor: '#FEE2E2',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 8,
+    borderRadius: 6,
+  },
+  suspendSmallBtnText: {
+    color: '#DC2626',
+    fontSize: 12,
+    fontWeight: '700',
   },
   emptyCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderRadius: 12,
     padding: 32,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    marginBottom: 20,
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#0F172A',
-    marginTop: 8,
-    marginBottom: 2,
-  },
-  emptySub: {
-    fontSize: 12,
-    color: '#64748B',
-  },
-  // Alumnus Pending Portal Styles
-  utilityBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    backgroundColor: '#F8FAFC',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
-  },
-  portalPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  amberDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#D97706',
-  },
-  portalPillText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#B45309',
-    letterSpacing: 0.5,
-  },
-  utilityActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: 8,
   },
-  helpAction: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  helpActionText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: AppColors.primary,
-  },
-  utilityDot: {
-    color: '#CBD5E1',
-  },
-  signOutLink: {
-    fontSize: 12,
-    color: '#64748B',
-    fontWeight: '500',
-  },
-  welcomeHero: {
-    alignItems: 'center',
-    marginVertical: 18,
-  },
-  heroShieldBox: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#EFF6FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-    marginBottom: 12,
-  },
-  heroClockBadge: {
-    position: 'absolute',
-    bottom: 2,
-    right: 2,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#D97706',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-  },
-  pendingStatusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FEF3C7',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
-    gap: 6,
-    marginBottom: 10,
-  },
-  pendingStatusBadgeText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#92400E',
-    letterSpacing: 0.5,
-  },
-  heroGreeting: {
-    fontSize: 20,
-    fontWeight: '800',
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '700',
     color: '#0F172A',
-    marginBottom: 6,
-    textAlign: 'center',
   },
-  heroSubText: {
+  emptySubtitle: {
     fontSize: 13,
     color: '#64748B',
     textAlign: 'center',
     lineHeight: 18,
-    paddingHorizontal: 20,
   },
-  noticeBanner: {
-    flexDirection: 'row',
+  // Pending verification styles
+  statusHeroCard: {
     backgroundColor: '#FFFBEB',
     borderRadius: 16,
-    padding: 14,
-    marginBottom: 18,
+    padding: 20,
+    alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#FEF3C7',
-    gap: 12,
+    borderColor: '#FDE68A',
+    gap: 10,
   },
-  noticeIconCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  statusHeroCardRejected: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+  },
+  statusIconCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     backgroundColor: '#FEF3C7',
-    alignItems: 'center',
     justifyContent: 'center',
+    alignItems: 'center',
   },
-  noticeTextCol: {
-    flex: 1,
+  statusIconCircleRejected: {
+    backgroundColor: '#FEE2E2',
   },
-  noticeTitle: {
+  statusGreeting: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0F172A',
+    textAlign: 'center',
+  },
+  statusDescription: {
     fontSize: 13,
-    fontWeight: '700',
-    color: '#0F172A',
-    marginBottom: 2,
+    color: '#475569',
+    textAlign: 'center',
+    lineHeight: 18,
   },
-  noticeSub: {
-    fontSize: 11,
-    color: '#64748B',
-    lineHeight: 16,
-    marginBottom: 8,
-  },
-  slaBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+  adminFeedbackBox: {
+    backgroundColor: '#EFF6FF',
+    padding: 12,
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
     gap: 4,
-    alignSelf: 'flex-start',
-    borderWidth: 1,
-    borderColor: '#FEF3C7',
+    width: '100%',
   },
-  slaText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#B45309',
-  },
-  noteCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginBottom: 18,
-  },
-  noteHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
-  noteTitleGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  noteTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#0F172A',
-  },
-  optionalTag: {
-    fontSize: 11,
-    color: '#64748B',
-  },
-  noteHelper: {
-    fontSize: 11,
-    color: '#64748B',
-    lineHeight: 15,
-    marginBottom: 10,
-  },
-  noteInputBox: {
-    backgroundColor: '#F8FAFC',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    padding: 10,
-    minHeight: 70,
-    marginBottom: 12,
-  },
-  noteInput: {
+  adminFeedbackLabel: {
     fontSize: 12,
-    color: '#0F172A',
-    lineHeight: 17,
+    fontWeight: '700',
+    color: '#1E3A8A',
   },
-  sendRequestBtn: {
-    height: 46,
-    borderRadius: 12,
+  adminFeedbackText: {
+    fontSize: 12,
+    color: '#1E40AF',
+    fontStyle: 'italic',
+  },
+  remarksInput: {
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 13,
+    color: '#0F172A',
+    backgroundColor: '#F8FAFC',
+    minHeight: 70,
+  },
+  primaryBtn: {
     backgroundColor: AppColors.primary,
+    paddingVertical: 12,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  btnRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  sendRequestText: {
+  primaryBtnText: {
     fontSize: 14,
     fontWeight: '700',
     color: '#FFFFFF',
   },
-  submittedCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginBottom: 18,
-  },
-  submittedHeader: {
+  btnContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 14,
+    gap: 8,
   },
-  submittedTitleGroup: {
+  refreshBtn: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  submittedTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#0F172A',
-  },
-  jnvIdBadge: {
-    backgroundColor: '#EEF2FF',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  jnvIdBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: AppColors.primary,
-  },
-  profileItemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: '#EFF6FF',
-    padding: 12,
-    borderRadius: 14,
-    marginBottom: 12,
-  },
-  profileMiniAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#DBEAFE',
+    gap: 6,
+    backgroundColor: '#475569',
+    paddingVertical: 12,
+    borderRadius: 8,
   },
-  profileMiniAvatarText: {
-    fontSize: 15,
-    fontWeight: '800',
+  refreshBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  editProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#EEF2FF',
+    marginTop: 4,
+  },
+  editProfileBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
     color: AppColors.primary,
   },
-  profileMiniMeta: {
-    flex: 1,
-  },
-  profileNameRow: {
+  logoutButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    marginBottom: 2,
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: 8,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    marginTop: 6,
   },
-  profileMiniName: {
+  logoutButtonText: {
     fontSize: 14,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  profileMiniSub: {
-    fontSize: 11,
-    color: '#475569',
-  },
-  infoRowBlock: {
-    flexDirection: 'row',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F8FAFC',
-    gap: 10,
-  },
-  blockIcon: {
-    marginTop: 2,
-  },
-  blockTextCol: {
-    flex: 1,
-  },
-  blockLabel: {
-    fontSize: 10,
     fontWeight: '700',
-    color: '#64748B',
-    marginBottom: 1,
+    color: '#DC2626',
   },
-  blockValue: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0F172A',
-  },
-  blockSub: {
-    fontSize: 11,
-    color: '#64748B',
-    marginTop: 1,
-  },
-  phoneBlockRow: {
-    flex: 1,
+  // Profile Cards Styles
+  studentHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: 12,
   },
-  otpTag: {
-    flexDirection: 'row',
+  avatarCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#EEF2FF',
+    justifyContent: 'center',
     alignItems: 'center',
+  },
+  avatarText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: AppColors.primary,
+  },
+  studentInfoCol: {
+    flex: 1,
+    gap: 2,
+  },
+  studentName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  studentSubText: {
+    fontSize: 12,
+    color: '#64748B',
+  },
+  activeStudentPill: {
     backgroundColor: '#ECFDF5',
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    gap: 4,
+    paddingVertical: 2,
+    borderRadius: 6,
   },
-  otpTagText: {
-    fontSize: 10,
+  activeStudentPillText: {
+    fontSize: 11,
     fontWeight: '700',
     color: '#059669',
   },
-  editProfileRow: {
+  tagsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  goalTag: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingTop: 12,
+    gap: 4,
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
   },
-  editPromptText: {
+  goalTagText: {
     fontSize: 12,
-    color: '#64748B',
+    fontWeight: '600',
+    color: '#B45309',
   },
-  editLinkText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: AppColors.primary,
+  mutedText: {
+    fontSize: 13,
+    color: '#94A3B8',
+    fontStyle: 'italic',
   },
-  socialProofCard: {
+  mentorHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#EEF2FF',
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 16,
     gap: 12,
   },
-  proofAvatarStack: {
-    flexDirection: 'row',
-  },
-  proofAvatar: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#FFFFFF',
-  },
-  proofText: {
-    fontSize: 8,
-    fontWeight: '800',
-    color: '#FFFFFF',
-  },
-  proofCardText: {
+  mentorInfoCol: {
     flex: 1,
-    fontSize: 11,
-    color: '#334155',
-    lineHeight: 16,
+    gap: 2,
   },
-  proofBold: {
-    fontWeight: '700',
-    color: '#0F172A',
-  },
-  refreshBrownBtn: {
-    height: 48,
-    borderRadius: 12,
-    backgroundColor: '#B45309',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 20,
-  },
-  refreshBrownBtnText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  // Student Active Dashboard Styles
-  studentTopBar: {
+  nameTagRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
   },
-  brandTitleRow: {
+  mentorName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  verifiedTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F0FDF4',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  verifiedTagText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  mentorOrgText: {
+    fontSize: 13,
+    color: '#0F172A',
+    fontWeight: '500',
+  },
+  mentorSubText: {
+    fontSize: 12,
+    color: '#64748B',
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  toggleTextCol: {
+    flex: 1,
+    gap: 2,
+    paddingRight: 12,
+  },
+  toggleLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  toggleSub: {
+    fontSize: 12,
+    color: '#64748B',
+  },
+  tagItem: {
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  tagItemText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: AppColors.primary,
+  },
+  modeItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F0FDF4',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  modeItemText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#15803D',
+  },
+  bioText: {
+    fontSize: 13,
+    color: '#334155',
+    lineHeight: 19,
+  },
+  complianceItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  logoCircle: {
+  complianceText: {
+    fontSize: 13,
+    color: '#334155',
+    flex: 1,
+  },
+  // Dev prototype banner
+  devBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  devIconBox: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#EFF6FF',
-    alignItems: 'center',
+    backgroundColor: '#E2E8F0',
     justifyContent: 'center',
+    alignItems: 'center',
   },
-  brandTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#0F172A',
-    lineHeight: 14,
-  },
-  brandSubtitle: {
-    fontSize: 8,
+  devBannerTitle: {
+    fontSize: 12,
     fontWeight: '700',
-    color: AppColors.primary,
-    letterSpacing: 0.5,
+    color: '#334155',
   },
-  jnvNetworkPill: {
+  devBannerSub: {
+    fontSize: 11,
+    color: '#64748B',
+  },
+  // Student Home Tab Components
+  welcomeBanner: {
+    backgroundColor: '#EEF2FF',
+    borderRadius: 14,
+    padding: 18,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#EEF2FF',
-    paddingHorizontal: 6,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+  },
+  welcomeGreeting: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1E3A8A',
+  },
+  welcomeSub: {
+    fontSize: 12,
+    color: '#3730A3',
+    marginTop: 4,
+    lineHeight: 16,
+  },
+  welcomeIconCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#FEF3C7',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
+  },
+  askHelpCard: {
+    backgroundColor: AppColors.primary,
+    borderRadius: 14,
+    padding: 16,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  askHelpContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  askHelpIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  askHelpTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  askHelpSub: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.85)',
+    marginTop: 2,
+  },
+  askHelpArrow: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  horizontalChipsRow: {
+    flexDirection: 'row',
+    gap: 8,
     paddingVertical: 2,
-    borderRadius: 8,
-    gap: 4,
   },
-  greenDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#10B981',
+  fieldChip: {
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
-  jnvNetworkText: {
-    fontSize: 9,
+  fieldChipActive: {
+    backgroundColor: '#EEF2FF',
+    borderColor: AppColors.primary,
+  },
+  fieldChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  fieldChipTextActive: {
+    color: AppColors.primary,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  sectionTitleGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  viewAllText: {
+    fontSize: 13,
     fontWeight: '600',
     color: AppColors.primary,
   },
-  topBarRight: {
+  alumniCarousel: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingVertical: 4,
+  },
+  alumniMiniCard: {
+    width: 140,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    padding: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    position: 'relative',
+    gap: 3,
+  },
+  onlineBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#10B981',
+  },
+  miniAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#EEF2FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  miniAvatarText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: AppColors.primary,
+  },
+  miniName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0F172A',
+    textAlign: 'center',
+  },
+  miniRole: {
+    fontSize: 11,
+    color: '#64748B',
+    textAlign: 'center',
+  },
+  miniCompany: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#334155',
+    textAlign: 'center',
+  },
+  miniConnectBtn: {
+    backgroundColor: AppColors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 12,
+    marginTop: 6,
+  },
+  miniConnectBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  sessionCardContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
-  schoolPickerPill: {
+  sessionDateBadge: {
+    backgroundColor: '#EEF2FF',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+  },
+  sessionDateMonth: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: AppColors.primary,
+  },
+  sessionDateDay: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: AppColors.primary,
+  },
+  sessionTopic: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  sessionWith: {
+    fontSize: 12,
+    color: '#475569',
+  },
+  sessionTime: {
+    fontSize: 11,
+    color: '#059669',
+    fontWeight: '600',
+  },
+  // Mentors Search tab
+  searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#F1F5F9',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    gap: 4,
-    maxWidth: 120,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 8,
   },
-  schoolPickerText: {
-    fontSize: 10,
-    fontWeight: '600',
+  searchInput: {
+    flex: 1,
+    fontSize: 13,
     color: '#0F172A',
   },
-  bellBtn: {
-    padding: 4,
-    position: 'relative',
+  smallFilterPill: {
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
-  bellRedDot: {
+  smallFilterPillActive: {
+    backgroundColor: '#EEF2FF',
+    borderColor: AppColors.primary,
+  },
+  smallFilterPillText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  smallFilterPillTextActive: {
+    color: AppColors.primary,
+  },
+  mentorCardActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 4,
+  },
+  requestGuidanceBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: AppColors.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  requestGuidanceBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  // Segmented control
+  segmentedRow: {
+    flexDirection: 'row',
+    backgroundColor: '#E2E8F0',
+    borderRadius: 8,
+    padding: 3,
+    gap: 4,
+  },
+  segmentBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  segmentBtnActive: {
+    backgroundColor: '#FFFFFF',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+  },
+  segmentBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  segmentBtnTextActive: {
+    color: AppColors.primary,
+    fontWeight: '700',
+  },
+  // Chat Tab
+  chatConversationCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 12,
+  },
+  chatAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#EEF2FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  chatAvatarText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: AppColors.primary,
+  },
+  chatInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  chatHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  chatName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  chatTime: {
+    fontSize: 11,
+    color: '#94A3B8',
+  },
+  chatLastMessage: {
+    fontSize: 12,
+    color: '#64748B',
+  },
+  chatBadge: {
+    backgroundColor: AppColors.primary,
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  chatBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  // Alumnus & JNV Admin Stats
+  statsGrid: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  statBox: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 2,
+  },
+  statNumber: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: AppColors.primary,
+  },
+  statLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  badgeCount: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  badgeCountText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#B45309',
+  },
+  selectAlumniBtn: {
+    backgroundColor: '#059669',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  selectAlumniBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  inviteAlumniBtn: {
+    backgroundColor: AppColors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  inviteAlumniBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  complianceNoticeBox: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: 10,
+    padding: 12,
+    flexDirection: 'row',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    alignItems: 'flex-start',
+  },
+  complianceNoticeText: {
+    fontSize: 12,
+    color: '#1E40AF',
+    lineHeight: 16,
+    flex: 1,
+  },
+  // Bottom Navigation Bar
+  bottomTabBar: {
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: -2 },
+  },
+  bottomTabItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+  },
+  tabIconWrapper: {
+    position: 'relative',
+    width: 26,
+    height: 26,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  bottomTabLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  bottomTabLabelActive: {
+    color: AppColors.primary,
+    fontWeight: '700',
+  },
+  tabBadge: {
     position: 'absolute',
-    top: 4,
-    right: 4,
+    top: -4,
+    right: -8,
+    backgroundColor: '#EF4444',
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 3,
+  },
+  tabBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  tabDot: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
     width: 6,
     height: 6,
     borderRadius: 3,
     backgroundColor: '#EF4444',
   },
-  studentAvatarCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#1E3A8A',
-    alignItems: 'center',
-    justifyContent: 'center',
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
   },
-  studentAvatarText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  studentProfileCard: {
+  modalContent: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginBottom: 14,
-  },
-  studentHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    maxHeight: '75%',
     gap: 12,
-    marginBottom: 12,
   },
-  studentAvatarLarge: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: '#1E3A8A',
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  studentAvatarLargeText: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#FFFFFF',
-  },
-  onlineDot: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: '#10B981',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-  },
-  studentMetaCol: {
-    flex: 1,
-  },
-  studentNameBadgeRow: {
+  modalHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 2,
-  },
-  studentNameText: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  activeStudentBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#ECFDF5',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 8,
-    gap: 4,
-  },
-  activeStudentDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#10B981',
-  },
-  activeStudentText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#059669',
-  },
-  scholarRollText: {
-    fontSize: 12,
-    color: '#64748B',
-  },
-  studentTagsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginBottom: 12,
-  },
-  tagBlue: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#EFF6FF',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    gap: 4,
-  },
-  tagBlueText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: AppColors.primary,
-  },
-  tagHouse: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F1F5F9',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    gap: 4,
-  },
-  houseDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  tagHouseText: {
-    fontSize: 11,
-    color: '#334155',
-    fontWeight: '500',
-  },
-  tagLocation: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FEF2F2',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    gap: 4,
-  },
-  tagLocationText: {
-    fontSize: 11,
-    color: '#991B1B',
-    fontWeight: '500',
-  },
-  strengthBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    gap: 6,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  strengthLabel: {
-    fontSize: 11,
-    color: '#64748B',
-    flex: 1,
-  },
-  strengthValue: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: AppColors.primary,
-  },
-  goalsSection: {
-    marginBottom: 16,
-  },
-  goalsHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+    paddingBottom: 12,
   },
-  goalsTitleRow: {
+  modalTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
   },
-  goalsTitle: {
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  notificationItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F8FAFC',
+  },
+  notifDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginTop: 5,
+  },
+  notifTitle: {
     fontSize: 13,
     fontWeight: '700',
     color: '#0F172A',
   },
-  batchYearText: {
-    fontSize: 11,
-    color: '#64748B',
-  },
-  goalsPillsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  goalPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 16,
-    gap: 6,
-  },
-  goalPillText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  addGoalBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 16,
-    gap: 4,
-  },
-  addGoalText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#475569',
-  },
-  discoveryCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginBottom: 20,
-  },
-  discoveryBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FEF3C7',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-    alignSelf: 'flex-start',
-    gap: 4,
-    marginBottom: 8,
-  },
-  discoveryBadgeText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#92400E',
-    letterSpacing: 0.5,
-  },
-  discoveryTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#0F172A',
-    marginBottom: 6,
-  },
-  discoverySub: {
+  notifBody: {
     fontSize: 12,
     color: '#475569',
-    lineHeight: 18,
-    marginBottom: 12,
-  },
-  discoveryBold: {
-    fontWeight: '700',
-    color: '#0F172A',
-  },
-  mentorInstitutionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 14,
-  },
-  miniAvatarsRow: {
-    flexDirection: 'row',
-  },
-  miniAvatar: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#FFFFFF',
-  },
-  miniText: {
-    fontSize: 8,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  institutionsText: {
-    fontSize: 11,
-    color: '#64748B',
-  },
-  browseMentorsBtn: {
-    height: 46,
-    borderRadius: 12,
-    backgroundColor: AppColors.primary,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  browseMentorsText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  quickActionsTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#0F172A',
-    marginBottom: 10,
-  },
-  quickGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    marginBottom: 18,
-  },
-  quickCard: {
-    width: '48%',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  quickIconCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  quickCardName: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0F172A',
-    marginBottom: 2,
-  },
-  quickCardDesc: {
-    fontSize: 10,
-    color: '#64748B',
-  },
-  mottoCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFBEB',
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#FEF3C7',
-    gap: 10,
-  },
-  mottoIconCircle: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#FEF3C7',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mottoTextCol: {
-    flex: 1,
-  },
-  mottoLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#B45309',
-    marginBottom: 1,
-  },
-  mottoQuote: {
-    fontSize: 11,
-    fontStyle: 'italic',
-    color: '#92400E',
-  },
-  // 5-Tab Navigation Bar
-  bottomTabBar: {
-    flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    justifyContent: 'space-around',
-  },
-  tabItem: {
-    alignItems: 'center',
-    paddingVertical: 2,
-  },
-  tabItemActive: {
-    alignItems: 'center',
-    paddingVertical: 2,
-  },
-  tabText: {
-    fontSize: 10,
-    color: '#64748B',
     marginTop: 2,
+    lineHeight: 16,
   },
-  tabTextActive: {
+  notifTime: {
     fontSize: 10,
-    fontWeight: '700',
+    color: '#94A3B8',
+    marginTop: 4,
+  },
+  markReadBtn: {
+    backgroundColor: '#F1F5F9',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  markReadBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
     color: AppColors.primary,
-    marginTop: 2,
   },
 });

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import * as SecureStore from 'expo-secure-store';
+import { storage } from '../api/storage';
 import { ACCESS_TOKEN_KEY, SIGNUP_TOKEN_KEY } from '../api/client';
 import { authApi } from '../api/auth';
 import { userApi } from '../api/user';
@@ -33,8 +33,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const bootstrapAsync = async () => {
       try {
-        const storedAccessToken = await SecureStore.getItemAsync(ACCESS_TOKEN_KEY);
-        const storedSignupToken = await SecureStore.getItemAsync(SIGNUP_TOKEN_KEY);
+        const storedAccessToken = await storage.getItem(ACCESS_TOKEN_KEY);
+        const storedSignupToken = await storage.getItem(SIGNUP_TOKEN_KEY);
 
         if (storedSignupToken) {
           setSignupToken(storedSignupToken);
@@ -47,6 +47,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               id: profile.id,
               phoneNumber: profile.phoneNumber,
               fullName: profile.fullName,
+              email: profile.email,
               role: profile.role,
               status: profile.status,
               jnvName: profile.jnvName,
@@ -108,6 +109,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         id: profile.id,
         phoneNumber: profile.phoneNumber,
         fullName: profile.fullName,
+        email: profile.email,
         role: profile.role,
         status: profile.status,
         jnvName: profile.jnvName,

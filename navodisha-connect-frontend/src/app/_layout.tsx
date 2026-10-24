@@ -19,6 +19,7 @@ export default function RootLayout() {
           <Stack.Screen name="register/step1" options={{ headerShown: false }} />
           <Stack.Screen name="register/student" options={{ headerShown: false }} />
           <Stack.Screen name="register/alumni" options={{ headerShown: false }} />
+          <Stack.Screen name="register/staff" options={{ headerShown: false }} />
           <Stack.Screen name="home" options={{ headerShown: false }} />
         </Stack>
       </AuthProvider>

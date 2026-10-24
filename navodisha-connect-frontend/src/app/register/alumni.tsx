@@ -31,25 +31,40 @@ const TOPICS = [
 
 export default function AlumniProfileScreen() {
   const router = useRouter();
-  const { user, refreshProfile } = useAuth();
+  const { user, fullProfile, refreshProfile } = useAuth();
 
-  const [batchYear, setBatchYear] = useState('2014');
-  const [currentOrg, setCurrentOrg] = useState('Google India');
-  const [designation, setDesignation] = useState('Senior Software Engineer');
-  const [currentCity, setCurrentCity] = useState('Bengaluru, Karnataka');
+  const [batchYear, setBatchYear] = useState(
+    fullProfile?.alumniDetails?.joinBatchYear?.toString() || '2014'
+  );
+  const [currentOrg, setCurrentOrg] = useState(
+    fullProfile?.alumniDetails?.currentOrg || 'Google India'
+  );
+  const [designation, setDesignation] = useState(
+    fullProfile?.alumniDetails?.designation || 'Senior Software Engineer'
+  );
+  const [currentCity, setCurrentCity] = useState(
+    fullProfile?.alumniDetails?.currentCity || 'Bengaluru, Karnataka'
+  );
   const [bio, setBio] = useState(
-    'Navodaya Pune region alumnus (2014). Passionate about helping rural students crack JEE & enter top tier tech. Happy to guide on software engineering, open source & college roadmaps.'
+    fullProfile?.alumniDetails?.bio ||
+      'Navodaya Pune region alumnus (2014). Passionate about helping rural students crack JEE & enter top tier tech. Happy to guide on software engineering, open source & college roadmaps.'
   );
 
-  const [selectedTopics, setSelectedTopics] = useState<string[]>([
-    'JEE Prep',
-    'Computer Science',
-    'Soft Skills & Interviews',
-  ]);
+  const [selectedTopics, setSelectedTopics] = useState<string[]>(
+    fullProfile?.alumniDetails?.provideMentorshipsOn || [
+      'JEE Prep',
+      'Computer Science',
+      'Soft Skills & Interviews',
+    ]
+  );
 
-  const [onlineVideo, setOnlineVideo] = useState(true);
-  const [schoolVisits, setSchoolVisits] = useState(true);
-  const [openToHelp, setOpenToHelp] = useState(true);
+  const [onlineVideo, setOnlineVideo] = useState(
+    fullProfile?.alumniDetails?.willingModes?.includes('Online Video / Chat') ?? true
+  );
+  const [schoolVisits, setSchoolVisits] = useState(
+    fullProfile?.alumniDetails?.willingModes?.includes('In-Person at JNV School Visits') ?? true
+  );
+  const [openToHelp, setOpenToHelp] = useState(fullProfile?.alumniDetails?.openToHelp ?? true);
 
   const [loading, setLoading] = useState(false);
 

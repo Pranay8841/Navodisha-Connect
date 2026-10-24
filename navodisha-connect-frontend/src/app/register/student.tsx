@@ -38,13 +38,23 @@ const EXAMS = [
 
 export default function StudentProfileScreen() {
   const router = useRouter();
-  const { user, refreshProfile } = useAuth();
+  const { user, fullProfile, refreshProfile } = useAuth();
 
-  const [admissionYear, setAdmissionYear] = useState('2020');
-  const [currentClass, setCurrentClass] = useState<ClassLevelType>('Class 12');
-  const [stream, setStream] = useState<StreamType>('Science (PCM)');
-  const [selectedHouse, setSelectedHouse] = useState<HouseType>('ARAVALI');
-  const [selectedExams, setSelectedExams] = useState<string[]>(['JEE Advanced', 'NDA']);
+  const [admissionYear, setAdmissionYear] = useState(
+    fullProfile?.studentDetails?.joinBatchYear?.toString() || '2020'
+  );
+  const [currentClass, setCurrentClass] = useState<ClassLevelType>(
+    fullProfile?.studentDetails?.classLevel || 'Class 12'
+  );
+  const [stream, setStream] = useState<StreamType>(
+    fullProfile?.studentDetails?.stream || 'Science (PCM)'
+  );
+  const [selectedHouse, setSelectedHouse] = useState<HouseType>(
+    fullProfile?.studentDetails?.house || 'ARAVALI'
+  );
+  const [selectedExams, setSelectedExams] = useState<string[]>(
+    fullProfile?.studentDetails?.preparingFor || ['JEE Advanced', 'NDA']
+  );
   const [isStreamOpen, setIsStreamOpen] = useState(false);
   const [loading, setLoading] = useState(false);
 

@@ -1,5 +1,5 @@
 import apiClient, { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, SIGNUP_TOKEN_KEY } from './client';
-import * as SecureStore from 'expo-secure-store';
+import { storage } from './storage';
 import {
   AuthResponse,
   RegisterRequest,
@@ -28,12 +28,12 @@ export const authApi = {
     });
 
     if (res.data.signupToken) {
-      await SecureStore.setItemAsync(SIGNUP_TOKEN_KEY, res.data.signupToken);
+      await storage.setItem(SIGNUP_TOKEN_KEY, res.data.signupToken);
     }
 
     if (res.data.auth) {
-      await SecureStore.setItemAsync(ACCESS_TOKEN_KEY, res.data.auth.accessToken);
-      await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, res.data.auth.refreshToken);
+      await storage.setItem(ACCESS_TOKEN_KEY, res.data.auth.accessToken);
+      await storage.setItem(REFRESH_TOKEN_KEY, res.data.auth.refreshToken);
     }
 
     return res.data;
@@ -45,9 +45,9 @@ export const authApi = {
   async register(data: RegisterRequest): Promise<AuthResponse> {
     const res = await apiClient.post<AuthResponse>('/api/v1/auth/register', data);
     if (res.data) {
-      await SecureStore.setItemAsync(ACCESS_TOKEN_KEY, res.data.accessToken);
-      await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, res.data.refreshToken);
-      await SecureStore.deleteItemAsync(SIGNUP_TOKEN_KEY);
+      await storage.setItem(ACCESS_TOKEN_KEY, res.data.accessToken);
+      await storage.setItem(REFRESH_TOKEN_KEY, res.data.refreshToken);
+      await storage.deleteItem(SIGNUP_TOKEN_KEY);
     }
     return res.data;
   },
@@ -56,8 +56,8 @@ export const authApi = {
    * Clear all tokens upon sign out
    */
   async logout(): Promise<void> {
-    await SecureStore.deleteItemAsync(ACCESS_TOKEN_KEY);
-    await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
-    await SecureStore.deleteItemAsync(SIGNUP_TOKEN_KEY);
+    await storage.deleteItem(ACCESS_TOKEN_KEY);
+    await storage.deleteItem(REFRESH_TOKEN_KEY);
+    await storage.deleteItem(SIGNUP_TOKEN_KEY);
   },
 };

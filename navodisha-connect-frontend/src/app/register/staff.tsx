@@ -19,30 +19,32 @@ import { AppColors } from '../../constants/colors';
 import { useAuth } from '../../context/AuthContext';
 import { userApi } from '../../api/user';
 
-const DESIGNATIONS = [
+const COMMON_DESIGNATIONS = [
   'PGT Computer Science',
-  'TGT Mathematics',
-  'Vice Principal',
-  'Principal',
+  'PGT Mathematics',
   'PGT Physics',
   'PGT Chemistry',
   'TGT Science',
-  'Staff Warden',
+  'Vice Principal',
+  'Principal',
 ];
 
 export default function StaffRegistrationScreen() {
   const router = useRouter();
-  const { user, refreshProfile } = useAuth();
+  const { user, fullProfile, refreshProfile } = useAuth();
 
-  const [designation, setDesignation] = useState('PGT Computer Science');
-  const [staffId, setStaffId] = useState('NVS-PUN-8492');
-  const [isAlumniCoordinator, setIsAlumniCoordinator] = useState(true);
-  const [serviceYears, setServiceYears] = useState<'1-3' | '4-7' | '8+'>('8+');
+  // Exactly matching backend UpdateJnvAdminProfileRequest: designation & isAlumniCoordinator
+  const [designation, setDesignation] = useState(
+    fullProfile?.jnvAdminDetails?.designation || 'PGT Computer Science'
+  );
+  const [isAlumniCoordinator, setIsAlumniCoordinator] = useState(
+    fullProfile?.jnvAdminDetails?.isAlumniCoordinator ?? true
+  );
   const [loading, setLoading] = useState(false);
 
   const handleFinish = async () => {
     if (!designation.trim()) {
-      Alert.alert('Required', 'Please select or enter your official designation.');
+      Alert.alert('Required', 'Please enter your official designation.');
       return;
     }
 
@@ -54,7 +56,7 @@ export default function StaffRegistrationScreen() {
       });
 
       await refreshProfile();
-      Alert.alert('Staff Profile Saved! 🎓', 'Your details have been submitted for regional verification.', [
+      Alert.alert('Staff Profile Saved! 🎓', 'Your faculty details have been updated.', [
         { text: 'Go to Portal', onPress: () => router.replace('/home') },
       ]);
     } catch (error: any) {
@@ -70,7 +72,6 @@ export default function StaffRegistrationScreen() {
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.keyboardView}>
-        
         {/* Navigation Bar */}
         <View style={styles.navBar}>
           <TouchableOpacity
@@ -84,7 +85,7 @@ export default function StaffRegistrationScreen() {
             <View style={styles.navLogo}>
               <Ionicons name="school" size={16} color={AppColors.primary} />
             </View>
-            <Text style={styles.navTitle}>Mentor Detail</Text>
+            <Text style={styles.navTitle}>Staff Profile</Text>
           </View>
 
           <View style={styles.navAvatar}>
@@ -96,59 +97,27 @@ export default function StaffRegistrationScreen() {
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}>
-          
-          {/* Progress Header */}
-          <View style={styles.progressContainer}>
-            <View style={styles.progressTextRow}>
-              <View style={styles.stepBadge}>
-                <Ionicons name="shield-checkmark" size={12} color="#B45309" />
-                <Text style={styles.stepBadgeText}>Step 2 of 2: Staff Role Verification</Text>
-              </View>
-              <Text style={styles.progressPercent}>80% Completed</Text>
-            </View>
-
-            <View style={styles.progressTrack}>
-              <View style={styles.progressFill80} />
-            </View>
-          </View>
-
-          {/* Heading */}
-          <Text style={styles.pageTitle}>JNV Staff Details</Text>
-          <View style={styles.subTitleRow}>
-            <Ionicons name="school-outline" size={14} color="#64748B" />
+          {/* Header */}
+          <View style={styles.headerBlock}>
+            <Text style={styles.pageTitle}>JNV Faculty & Staff Details</Text>
             <Text style={styles.pageSubTitle}>
-              {user?.jnvName || 'JNV Gadchiroli'} • Faculty & Administration Network
+              Update your administrative profile for {user?.jnvName || 'your Vidyalaya'}
             </Text>
           </View>
 
-          {/* School Card */}
+          {/* Vidyalaya Card */}
           <View style={styles.schoolCard}>
             <View style={styles.schoolIconCircle}>
-              <Ionicons name="business" size={24} color={AppColors.primary} />
+              <Ionicons name="business" size={22} color={AppColors.primary} />
             </View>
             <View style={styles.schoolInfoCol}>
-              <View style={styles.confirmedRow}>
-                <View style={styles.confirmedBadge}>
-                  <Ionicons name="checkmark-circle" size={12} color="#059669" />
-                  <Text style={styles.confirmedText}>Confirmed Vidyalaya</Text>
-                </View>
-                <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
-                  <Text style={styles.changeLink}>Change</Text>
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.schoolName}>{user?.jnvName || 'JNV Gadchiroli'}</Text>
-              <Text style={styles.schoolRegion}>District: Gadchiroli • Maharashtra (Pune Region)</Text>
-
-              <View style={styles.affiliationRow}>
-                <Ionicons name="id-card-outline" size={14} color="#64748B" />
-                <Text style={styles.affiliationLabel}>NVS Affiliation Code:</Text>
-                <Text style={styles.affiliationCode}>1140004</Text>
-              </View>
+              <Text style={styles.schoolLabel}>Confirmed Vidyalaya</Text>
+              <Text style={styles.schoolName}>{user?.jnvName || 'JNV Vidyalaya'}</Text>
             </View>
           </View>
 
-          {/* Official Designation Field */}
-          <View style={styles.fieldSection}>
+          {/* Official Designation (Backend: designation) */}
+          <View style={styles.card}>
             <View style={styles.fieldLabelRow}>
               <Text style={styles.fieldLabel}>
                 Official Designation <Text style={styles.asterisk}>*</Text>
@@ -162,64 +131,42 @@ export default function StaffRegistrationScreen() {
                 style={styles.textInput}
                 value={designation}
                 onChangeText={setDesignation}
-                placeholder="PGT Computer Science"
+                placeholder="e.g. PGT Computer Science"
                 placeholderTextColor={AppColors.textMuted}
               />
-              <Ionicons name="swap-vertical" size={16} color="#64748B" />
             </View>
 
+            {/* Quick Suggestions */}
             <View style={styles.pillsRow}>
-              {DESIGNATIONS.slice(0, 3).map((des) => (
+              {COMMON_DESIGNATIONS.map((item) => (
                 <TouchableOpacity
-                  key={des}
-                  style={[styles.quickPill, designation === des && styles.quickPillActive]}
-                  onPress={() => setDesignation(des)}
+                  key={item}
+                  style={[styles.quickPill, designation === item && styles.quickPillActive]}
+                  onPress={() => setDesignation(item)}
                   activeOpacity={0.7}>
-                  <Text style={[styles.quickPillText, designation === des && styles.quickPillTextActive]}>
-                    {des}
+                  <Text
+                    style={[
+                      styles.quickPillText,
+                      designation === item && styles.quickPillTextActive,
+                    ]}>
+                    {item}
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
 
-          {/* Samiti Staff ID / PRAN */}
-          <View style={styles.fieldSection}>
-            <View style={styles.fieldLabelRow}>
-              <Text style={styles.fieldLabel}>Samiti Staff ID / PRAN</Text>
-              <View style={styles.optionalBadge}>
-                <Ionicons name="shield-outline" size={11} color="#64748B" />
-                <Text style={styles.optionalText}>Optional Fast-Track</Text>
-              </View>
-            </View>
-
-            <View style={styles.inputContainer}>
-              <Ionicons name="lock-closed-outline" size={18} color="#64748B" style={styles.inputIcon} />
-              <TextInput
-                style={styles.textInput}
-                value={staffId}
-                onChangeText={setStaffId}
-                placeholder="NVS-PUN-8492"
-                placeholderTextColor={AppColors.textMuted}
-                autoCapitalize="characters"
-              />
-              {staffId.length > 3 && (
-                <Ionicons name="checkmark-circle" size={20} color="#059669" />
-              )}
-            </View>
-            <Text style={styles.inputHelperText}>
-              Used solely to securely verify administrative privileges and prevent faculty impersonation.
-            </Text>
-          </View>
-
-          {/* Alumni Coordinator Card */}
-          <View style={styles.coordinatorCard}>
-            <View style={styles.coordinatorTop}>
-              <View style={styles.coordinatorBadge}>
-                <Ionicons name="ribbon" size={20} color="#B45309" />
+          {/* Alumni Coordinator Toggle (Backend: isAlumniCoordinator) */}
+          <View style={styles.card}>
+            <View style={styles.coordinatorRow}>
+              <View style={styles.coordinatorIconBox}>
+                <Ionicons name="ribbon-outline" size={22} color="#B45309" />
               </View>
               <View style={styles.coordinatorTextCol}>
                 <Text style={styles.coordinatorTitle}>Designated Alumni Coordinator</Text>
+                <Text style={styles.coordinatorSub}>
+                  Enables you to verify alumni profiles and coordinate mentorship guidance for students.
+                </Text>
               </View>
               <Switch
                 value={isAlumniCoordinator}
@@ -228,77 +175,9 @@ export default function StaffRegistrationScreen() {
                 thumbColor="#FFFFFF"
               />
             </View>
-
-            <Text style={styles.coordinatorSub}>
-              Enables you to verify alumni profiles from your Vidyalaya, manage the local batch database, and schedule on-campus guidance workshops.
-            </Text>
-
-            <View style={styles.privilegeBadge}>
-              <Ionicons name="checkmark-done" size={14} color={AppColors.primary} />
-              <Text style={styles.privilegeText}>
-                Privilege assigned: Regional JNV Verified Admin Badge
-              </Text>
-            </View>
           </View>
 
-          {/* Years of Navodaya Service */}
-          <View style={styles.fieldSection}>
-            <View style={styles.fieldLabelRow}>
-              <Text style={styles.fieldLabel}>Years of Navodaya Service</Text>
-              <Text style={styles.fieldCaption}>Across all JNVs</Text>
-            </View>
-
-            <View style={styles.serviceRow}>
-              <TouchableOpacity
-                style={[styles.serviceCard, serviceYears === '1-3' && styles.serviceCardActive]}
-                onPress={() => setServiceYears('1-3')}
-                activeOpacity={0.8}>
-                <Text style={[styles.serviceTitle, serviceYears === '1-3' && styles.serviceTitleActive]}>
-                  1–3 Years
-                </Text>
-                <Text style={[styles.serviceSub, serviceYears === '1-3' && styles.serviceSubActive]}>
-                  Novice
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.serviceCard, serviceYears === '4-7' && styles.serviceCardActive]}
-                onPress={() => setServiceYears('4-7')}
-                activeOpacity={0.8}>
-                <Text style={[styles.serviceTitle, serviceYears === '4-7' && styles.serviceTitleActive]}>
-                  4–7 Years
-                </Text>
-                <Text style={[styles.serviceSub, serviceYears === '4-7' && styles.serviceSubActive]}>
-                  Experienced
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.serviceCard, serviceYears === '8+' && styles.serviceCardActive]}
-                onPress={() => setServiceYears('8+')}
-                activeOpacity={0.8}>
-                <Text style={[styles.serviceTitle, serviceYears === '8+' && styles.serviceTitleActive]}>
-                  8+ Years
-                </Text>
-                <Text style={[styles.serviceSub, serviceYears === '8+' && styles.serviceSubActive]}>
-                  Veteran Faculty
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* Mentorship Reach Card */}
-          <View style={styles.reachBanner}>
-            <View style={styles.reachIconBox}>
-              <Ionicons name="people" size={20} color={AppColors.primary} />
-            </View>
-            <View style={styles.reachTextCol}>
-              <Text style={styles.reachTitle}>Mentorship Reach: 1,420+ Alumni</Text>
-              <Text style={styles.reachSub}>Connected to IIT, AIIMS, UPSC & Industry...</Text>
-            </View>
-          </View>
-
-          {/* Submit CTA */}
+          {/* Submit Action */}
           <TouchableOpacity
             style={styles.ctaButton}
             onPress={handleFinish}
@@ -308,15 +187,11 @@ export default function StaffRegistrationScreen() {
               <ActivityIndicator color="#FFFFFF" />
             ) : (
               <View style={styles.ctaContent}>
-                <Text style={styles.ctaText}>Save Details & Submit for Review</Text>
+                <Text style={styles.ctaText}>Save Details</Text>
                 <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
               </View>
             )}
           </TouchableOpacity>
-
-          <Text style={styles.reviewNoteText}>
-            Review usually completes within 24 hours via JNV Pune Regional Office.
-          </Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -326,7 +201,7 @@ export default function StaffRegistrationScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: AppColors.background,
+    backgroundColor: '#F8FAFC',
   },
   keyboardView: {
     flex: 1,
@@ -335,14 +210,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
     backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
   },
   navButton: {
-    padding: 6,
+    padding: 4,
   },
   navTitleRow: {
     flexDirection: 'row',
@@ -352,10 +227,10 @@ const styles = StyleSheet.create({
   navLogo: {
     width: 28,
     height: 28,
-    borderRadius: 14,
-    backgroundColor: '#EFF6FF',
-    alignItems: 'center',
+    borderRadius: 6,
+    backgroundColor: '#EEF2FF',
     justifyContent: 'center',
+    alignItems: 'center',
   },
   navTitle: {
     fontSize: 16,
@@ -367,156 +242,74 @@ const styles = StyleSheet.create({
     height: 32,
     borderRadius: 16,
     backgroundColor: AppColors.primary,
-    alignItems: 'center',
     justifyContent: 'center',
+    alignItems: 'center',
   },
   scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 36,
+    padding: 16,
+    gap: 16,
   },
-  progressContainer: {
-    marginBottom: 16,
-  },
-  progressTextRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  stepBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FEF3C7',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 10,
-    gap: 6,
-  },
-  stepBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#92400E',
-  },
-  progressPercent: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  progressTrack: {
-    width: '100%',
-    height: 4,
-    backgroundColor: '#E2E8F0',
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progressFill80: {
-    width: '80%',
-    height: '100%',
-    backgroundColor: AppColors.primary,
+  headerBlock: {
+    gap: 4,
   },
   pageTitle: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: '800',
     color: '#0F172A',
-    marginBottom: 4,
-  },
-  subTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 18,
   },
   pageSubTitle: {
-    fontSize: 12,
+    fontSize: 13,
     color: '#64748B',
+    lineHeight: 18,
   },
   schoolCard: {
     flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
+    borderRadius: 12,
+    padding: 14,
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    marginBottom: 20,
     gap: 12,
   },
   schoolIconCircle: {
     width: 44,
     height: 44,
-    borderRadius: 12,
-    backgroundColor: '#EFF6FF',
-    alignItems: 'center',
+    borderRadius: 22,
+    backgroundColor: '#EEF2FF',
     justifyContent: 'center',
+    alignItems: 'center',
   },
   schoolInfoCol: {
     flex: 1,
+    gap: 2,
   },
-  confirmedRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 4,
-  },
-  confirmedBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#ECFDF5',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 8,
-    gap: 4,
-  },
-  confirmedText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#059669',
-  },
-  changeLink: {
-    fontSize: 12,
+  schoolLabel: {
+    fontSize: 11,
     fontWeight: '600',
-    color: AppColors.primary,
+    color: '#059669',
+    textTransform: 'uppercase',
   },
   schoolName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#0F172A',
-    marginBottom: 2,
-  },
-  schoolRegion: {
-    fontSize: 12,
-    color: '#64748B',
-    marginBottom: 8,
-  },
-  affiliationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    gap: 6,
-  },
-  affiliationLabel: {
-    fontSize: 11,
-    color: '#64748B',
-  },
-  affiliationCode: {
-    fontSize: 12,
+    fontSize: 15,
     fontWeight: '700',
     color: '#0F172A',
   },
-  fieldSection: {
-    marginBottom: 18,
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 12,
   },
   fieldLabelRow: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    alignItems: 'center',
   },
   fieldLabel: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
     color: '#0F172A',
   },
@@ -527,86 +320,67 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748B',
   },
-  optionalBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  optionalText: {
-    fontSize: 11,
-    color: '#64748B',
-  },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
-    paddingHorizontal: 14,
-    height: 50,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#F8FAFC',
   },
   inputIcon: {
-    marginRight: 10,
+    marginRight: 8,
   },
   textInput: {
     flex: 1,
+    paddingVertical: 12,
     fontSize: 14,
-    fontWeight: '600',
     color: '#0F172A',
   },
   pillsRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
-    marginTop: 8,
+    marginTop: 4,
   },
   quickPill: {
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#F1F5F9',
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 12,
+    borderRadius: 6,
   },
   quickPillActive: {
-    backgroundColor: AppColors.primary,
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1,
+    borderColor: AppColors.primary,
   },
   quickPillText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: AppColors.primary,
+    fontSize: 12,
+    color: '#64748B',
+    fontWeight: '500',
   },
   quickPillTextActive: {
-    color: '#FFFFFF',
+    color: AppColors.primary,
+    fontWeight: '700',
   },
-  inputHelperText: {
-    fontSize: 11,
-    color: '#64748B',
-    lineHeight: 15,
-    marginTop: 6,
-  },
-  coordinatorCard: {
-    backgroundColor: '#FFFBEB',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#FEF3C7',
-    marginBottom: 20,
-  },
-  coordinatorTop: {
+  coordinatorRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    marginBottom: 8,
+    gap: 12,
   },
-  coordinatorBadge: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  coordinatorIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: '#FEF3C7',
-    alignItems: 'center',
     justifyContent: 'center',
+    alignItems: 'center',
   },
   coordinatorTextCol: {
     flex: 1,
+    gap: 2,
+    paddingRight: 8,
   },
   coordinatorTitle: {
     fontSize: 14,
@@ -615,102 +389,16 @@ const styles = StyleSheet.create({
   },
   coordinatorSub: {
     fontSize: 12,
-    color: '#475569',
-    lineHeight: 17,
-    marginBottom: 12,
-  },
-  privilegeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 8,
-    gap: 6,
-    borderWidth: 1,
-    borderColor: '#FEF3C7',
-  },
-  privilegeText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: AppColors.primary,
-  },
-  serviceRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  serviceCard: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-  },
-  serviceCardActive: {
-    backgroundColor: AppColors.primary,
-    borderColor: AppColors.primary,
-  },
-  serviceTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0F172A',
-    marginBottom: 2,
-  },
-  serviceTitleActive: {
-    color: '#FFFFFF',
-  },
-  serviceSub: {
-    fontSize: 10,
     color: '#64748B',
-  },
-  serviceSubActive: {
-    color: '#93C5FD',
-  },
-  reachBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#EEF2FF',
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 20,
-    gap: 12,
-    borderWidth: 1,
-    borderColor: '#DBEAFE',
-  },
-  reachIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  reachTextCol: {
-    flex: 1,
-  },
-  reachTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0F172A',
-  },
-  reachSub: {
-    fontSize: 11,
-    color: '#475569',
+    lineHeight: 16,
   },
   ctaButton: {
-    height: 52,
-    borderRadius: 14,
     backgroundColor: AppColors.primary,
+    paddingVertical: 14,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 10,
-    shadowColor: AppColors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 4,
+    marginTop: 8,
   },
   ctaContent: {
     flexDirection: 'row',
@@ -721,11 +409,5 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#FFFFFF',
-  },
-  reviewNoteText: {
-    fontSize: 11,
-    color: '#64748B',
-    textAlign: 'center',
-    lineHeight: 16,
   },
 });
